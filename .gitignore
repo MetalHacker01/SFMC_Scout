@@ -1,0 +1,15 @@
+# Dev/debug files
+debug.html
+debug.js
+CLAUDE.md
+
+# Internal planning docs
+docs/superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
