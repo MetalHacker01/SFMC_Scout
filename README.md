@@ -1,8 +1,6 @@
-# SFMC Scout
+# ![SFMC Scout](icons/icon-48.png) SFMC Scout
 
-**SFMC Scout** is a Chrome extension that injects a persistent side panel into Salesforce Marketing Cloud, giving developers and marketers instant access to search, automation details, Data Extension tools, journeys, assets, activities, snippets, and exportable reports — without ever leaving the SFMC interface.
-
-![SFMC Scout](icons/icon-48.png)
+**SFMC Scout** is a Chrome extension that injects a persistent side panel into Salesforce Marketing Cloud, giving developers and marketers instant access to search, automation details, Data Extension tools, journeys, assets, activities, snippets, and exportable reports without ever leaving the SFMC interface.
 
 ---
 
@@ -16,24 +14,24 @@ Search across your entire SFMC account in one keystroke:
 - **Content Builder Assets & Emails** — name, type, folder, created by, asset ID
 - **Activities** — SQL Queries, Scripts, Filters, Send Emails, Imports, File Transfers, Data Extracts
 
-Click a result to open it inline (automations) or copy its name to clipboard (assets/emails).
+Click a result to open it inline (automations) or copy its name to clipboard (assets and emails).
 
 ### Automations
-- Browse all automations with status badges (Active, Scheduled, Paused, Error, Ready)
-- Click any automation to view its full step breakdown — every SQL query, Script, and activity
+- Browse all automations with color-coded status badges (Active, Scheduled, Paused, Error, Ready)
+- Click any automation to view its full step breakdown with every SQL query, Script, and activity
 - Syntax-highlighted SQL and SSJS code blocks, expandable per step
 - Open the automation directly in SFMC Automation Studio from the detail view
 
 ### Data Extension Tools
-- **Search** — find any DE by name with field count, folder, sendable flag
-- **Create** — build a new DE with typed fields, sendable/testable config, folder selector
+- **Search** — find any DE by name with field count, folder, and sendable flag
+- **Create** — build a new DE with typed fields, sendable/testable config, and folder selector
 - **Export** — download all DEs as structured JSON or individual files in a ZIP
-- **Import** — restore DEs from a previously exported JSON (with folder re-creation)
-- **Report** — generate a full HTML or CSV report of all DEs with row counts, field counts, sendable mapping
+- **Import** — restore DEs from a previously exported JSON with optional folder re-creation
+- **Report** — generate a full HTML or CSV report of all DEs with row counts, field counts, and sendable mapping
 
 ### Journeys
 - Browse all active and draft journeys with status, version, and channel
-- Color-coded statuses: Running (green), Draft (yellow), Stopped (red)
+- Color-coded statuses: Running (green), Draft/Unpublished (yellow), Stopped (red)
 
 ### Reports
 All reports open in a new tab as standalone HTML pages with:
@@ -56,7 +54,7 @@ Available reports:
 - Full syntax highlighting preview
 
 ### Dark / Light Mode
-Toggle between dark (default) and SFMC Marketing Cloud light mode at any time. Theme persists across sessions and applies to all reports generated during that session.
+Toggle between dark (default) and SFMC Marketing Cloud light mode at any time. The theme persists across sessions and applies to all reports generated during that session.
 
 ---
 
@@ -69,14 +67,14 @@ Toggle between dark (default) and SFMC Marketing Cloud light mode at any time. T
 3. Enable **Developer mode** (toggle in the top right)
 4. Click **Load unpacked**
 5. Select the `SFMC_Scout/` folder (the one containing `manifest.json`)
-6. Navigate to any SFMC page — the **Scout** toggle button will appear on the right edge of the screen
+6. Navigate to any SFMC page and the **Scout** toggle button will appear on the right edge of the screen
 
 ---
 
 ## How It Works
 
 ### Token Capture
-SFMC Scout captures session tokens passively by intercepting `x-csrf-token` headers from SFMC's own HTTP requests via Chrome's `webRequest` API — no credentials are stored or transmitted externally.
+SFMC Scout captures session tokens passively by intercepting `x-csrf-token` headers from SFMC's own HTTP requests via Chrome's `webRequest` API. No credentials are stored or transmitted externally.
 
 On first open, if tokens are not yet cached, the extension opens a minimized background window with SFMC sub-app tabs to trigger token-bearing requests. Tokens are stored locally in `chrome.storage.local` and reused until they expire.
 
@@ -105,7 +103,7 @@ services/
   DESearchService     DE search via REST API
 
 utils/
-  InstanceService     Stack detection from hostname (mc.s51 → s51)
+  InstanceService     Stack detection from hostname (mc.s51 -> s51)
   APIService          Authenticated fetch wrapper (CORS proxy via background)
   CSRFService         Token retrieval from storage
   StorageService      chrome.storage.local helpers
@@ -117,7 +115,7 @@ core/
 ```
 
 ### SFMC Compatibility
-Tested on standard SFMC stacks (`s1`–`s51`). Stack detection is automatic from the active tab URL.
+Tested on standard SFMC stacks (`s1` through `s51`). Stack detection is automatic from the active tab URL.
 
 ---
 
@@ -133,16 +131,16 @@ Tested on standard SFMC stacks (`s1`–`s51`). Stack detection is automatic from
 
 ## Security & Privacy
 
-- All API calls are made using the user's own authenticated SFMC browser session (`credentials: 'include'`)
+- All API calls use the user's own authenticated SFMC browser session (`credentials: 'include'`)
 - No data is sent to any external server
-- Tokens are stored only in `chrome.storage.local` (local to the browser profile)
+- Tokens are stored only in `chrome.storage.local`, local to the browser profile
 - No login credentials are ever captured or stored
 
 ---
 
 ## Author
 
-Built by **Aldorino Rrushi** — MarTech Developer at MarketOne International
+Built by **Aldorino Rrushi**, MarTech Solution Engineer
 
 - [LinkedIn](https://www.linkedin.com/in/aldorino-rrushi/)
 - [Portfolio](https://martech-maestro-folio-sroh.vercel.app/)
