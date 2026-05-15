@@ -7,22 +7,20 @@
 import { InstanceService } from '../utils/InstanceService.js';
 
 /**
- * Fetch the CSRF token for DE operations by loading the contactsmeta admin page
- * and parsing global.contacts.csrfToken from the HTML — same approach as IntellyType.
- * This is the only reliable method that works without prior page navigation.
+ * Read the CSRF token captured passively from outgoing SFMC requests.
+ * The webRequest listener in background.js stores it as scout_deToken/scout_adminToken
+ * whenever the user navigates Contact Builder or any contactsmeta page.
+ *
+ * Returns null if no token has been captured yet — caller should surface a clear
+ * "please open Contact Builder once and retry" error rather than proactively fetching
+ * admin.html (which redirects to OAuth and causes a CORS-induced retry loop).
  */
-async function fetchContactsMetaToken(instance) {
-    const url = `https://${instance}.marketingcloudapps.com/contactsmeta/admin.html?hub=1`;
-    const response = await fetch(url, { method: 'GET', credentials: 'include' });
-    if (!response.ok) {
-        throw new Error(`Cannot reach contactsmeta (HTTP ${response.status}) — ensure you are logged into SFMC`);
-    }
-    const html = await response.text();
-    const match = html.match(/global\.contacts\.csrfToken\s*=\s*'([^']+)'/);
-    if (!match || !match[1]) {
-        throw new Error('CSRF token not found in contactsmeta page — ensure you are logged into SFMC and have access to Data Extensions');
-    }
-    return match[1];
+async function getCapturedDeToken() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['scout_deToken', 'scout_adminToken'], (r) => {
+            resolve(r.scout_deToken || r.scout_adminToken || null);
+        });
+    });
 }
 
 /**
@@ -47,8 +45,13 @@ export async function createDataExtension(deName, fields, folderId = "0", isSend
         instance = `mc.${instance}`;
     }
 
-    const csrfToken = await fetchContactsMetaToken(instance);
-    const apiUrl = `https://${instance}.marketingcloudapps.com/contactsmeta/fuelapi/internal/v1/customobjects/`;
+    // Primary endpoint: cookie-only proxy on the main domain — no CSRF token required.
+    // Tries this first; if the proxy rejects POST without CSRF (some BUs may), retries
+    // against the contactsmeta endpoint with a passively-captured token.
+    const stack = instance.replace(/^mc\./, '');
+    const apiUrl       = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/internal/v1/customobjects/`;
+    const fallbackUrl  = `https://${instance}.marketingcloudapps.com/contactsmeta/fuelapi/internal/v1/customobjects/`;
+    const csrfToken    = await getCapturedDeToken();
 
     // Normalize fields to match API requirements
     const normalizedFields = fields.map((field, index) => {
@@ -106,15 +109,31 @@ export async function createDataExtension(deName, fields, folderId = "0", isSend
         payload.SendContactKeyStorageName = subscriberField.trim();
     }
 
-    const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-csrf-token': csrfToken
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-    });
+    const postOnce = async (url, withCsrf) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (withCsrf && csrfToken) headers['x-csrf-token'] = csrfToken;
+        return fetch(url, {
+            method: 'POST',
+            headers,
+            credentials: 'include',
+            body: JSON.stringify(payload)
+        });
+    };
+
+    // Attempt 1: cookie-only main-domain proxy, no token.
+    let response;
+    try {
+        response = await postOnce(apiUrl, false);
+    } catch (e) {
+        throw new Error(`DE creation failed: ${e.message} — ensure SFMC is open and you are logged in`);
+    }
+
+    // If the proxy returned 401/403, retry through contactsmeta with a captured CSRF token.
+    if ((response.status === 401 || response.status === 403) && csrfToken) {
+        try { response = await postOnce(fallbackUrl, true); } catch (_) {}
+    } else if ((response.status === 401 || response.status === 403) && !csrfToken) {
+        throw new Error('DE creation requires a captured CSRF token. Open Contact Builder once in this browser, then retry.');
+    }
 
     if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -128,7 +147,6 @@ export async function createDataExtension(deName, fields, folderId = "0", isSend
         throw new Error(`Failed to create DE: ${errorMsg}`);
     }
 
-    const result = await response.json();
-    return result;
+    return await response.json();
 }
 

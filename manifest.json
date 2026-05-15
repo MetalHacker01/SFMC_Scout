@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SFMC Scout",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Search and manage Data Extensions, Automations, Journeys, Emails, and more across Salesforce Marketing Cloud — injected panel, no login required.",
   "author": "Aldorino Rrushi",
 
@@ -14,12 +14,11 @@
 
   "host_permissions": [
     "https://*.marketingcloudapps.com/*",
-    "https://*.exacttarget.com/*",
-    "https://querystudio.herokuapp.com/*"
+    "https://*.exacttarget.com/*"
   ],
 
   "action": {
-    "default_title": "SFMC Scout — Open Token Debug",
+    "default_title": "SFMC Scout — Open an SFMC tab to use the side panel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png"
@@ -35,8 +34,7 @@
     {
       "matches": [
         "https://*.marketingcloudapps.com/*",
-        "https://*.exacttarget.com/*",
-        "https://querystudio.herokuapp.com/*"
+        "https://*.exacttarget.com/*"
       ],
       "js": ["content.js"],
       "all_frames": false,
@@ -55,8 +53,7 @@
       ],
       "matches": [
         "https://*.marketingcloudapps.com/*",
-        "https://*.exacttarget.com/*",
-        "https://querystudio.herokuapp.com/*"
+        "https://*.exacttarget.com/*"
       ]
     }
   ],

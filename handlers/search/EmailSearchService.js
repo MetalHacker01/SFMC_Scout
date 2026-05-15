@@ -30,19 +30,31 @@ export class EmailSearchService {
      */
     static async searchAlternative(searchTerm, instance) {
         try {
-            const url = `https://${instance}.marketingcloudapps.com/contactsmeta/fuelapi/asset/v1/content/assets?$page=1&$pageSize=100`;
-            const response = await fetch(url, {
-                method: 'GET',
-                credentials: 'include',
-                headers: { 'accept': 'application/json' }
-            });
-
-            if (!response.ok) {
-                return [];
+            // Cookie-only proxy on the main domain — no CSRF token needed.
+            // Paginate through all asset pages so we don't silently miss matching emails
+            // when the org has more than one page of assets.
+            const PAGE_SIZE = 500;
+            let page = 1;
+            let total = 0;
+            let items = [];
+            while (true) {
+                const url = `https://${instance}.exacttarget.com/cloud/fuelapi/asset/v1/content/assets?$page=${page}&$pageSize=${PAGE_SIZE}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: { 'accept': 'application/json' }
+                });
+                if (!response.ok) {
+                    if (page === 1) return [];
+                    break;
+                }
+                const data = await response.json();
+                const pageItems = data.items || data.entry || [];
+                items = items.concat(pageItems);
+                if (page === 1) total = data.count || data.totalCount || pageItems.length;
+                if (pageItems.length < PAGE_SIZE || items.length >= total) break;
+                page++;
             }
-
-            const data = await response.json();
-            const items = data.items || data.entry || [];
             const searchLower = searchTerm.toLowerCase().trim();
 
             // Filter emails by name

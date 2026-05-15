@@ -58,6 +58,30 @@ Toggle between dark (default) and SFMC Marketing Cloud light mode at any time. T
 
 ---
 
+## Parked features (not currently exposed)
+
+### Contact Search (debug page)
+A debug page at `debug.html` hosts an experimental email/subscriber-key lookup that queries SFMC's contacts-internal API. It works reliably in dev / sandbox orgs but is **unreliable in production** because:
+
+- The contacts-internal endpoint requires both `Authorization: Bearer {MID}` and `x-csrf-token` headers
+- The CSRF token rotates faster than the panel can passively re-capture it on a high-traffic production org
+- A 403 → manual CSRF refresh → retry cycle is required for every search
+
+The page, handlers (`handlers/de/FieldDefinitionsHandler.js`, `FETCH_MID` SW message), and `parseContactsInternalResponse` parser are all kept intact in the codebase for future re-enablement. The toolbar-icon entry point is commented out in [background.js](background.js) (search for "Toolbar icon click").
+
+**To re-enable for dev work:**
+1. Uncomment the `chrome.action.onClicked.addListener` block at the bottom of `background.js`
+2. Reload the extension
+3. Click the toolbar icon to open the debug page
+4. In the Contacts tab: navigate to Contact Builder once in any SFMC tab to passively populate MID + CSRF, then search by email or subscriber key
+
+**Future enhancement plan:**
+- Auto-retry on 403 with a silent passive re-capture (currently shown as a TODO)
+- Pre-flight CSRF freshness check before each contacts call
+- Expose a "Contacts" tab inside the main panel once the retry/freshness loop is stable
+
+---
+
 ## Installation
 
 > SFMC Scout is a developer tool intended for internal use. It is not published on the Chrome Web Store.
@@ -66,17 +90,27 @@ Toggle between dark (default) and SFMC Marketing Cloud light mode at any time. T
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable **Developer mode** (toggle in the top right)
 4. Click **Load unpacked**
-5. Select the `SFMC_Scout/` folder (the one containing `manifest.json`)
+5. Select the cloned `SFMC_Scout/` folder (the one containing `manifest.json`)
 6. Navigate to any SFMC page and the **Scout** toggle button will appear on the right edge of the screen
+
+> Full documentation is published as a GitHub Pages site from this repo's `index.html`. Enable Pages under **Settings → Pages → Branch: `main` / Folder: `/ (root)`**.
 
 ---
 
 ## How It Works
 
-### Token Capture
-SFMC Scout captures session tokens passively by intercepting `x-csrf-token` headers from SFMC's own HTTP requests via Chrome's `webRequest` API. No credentials are stored or transmitted externally.
+### Authentication (cookie-only proxy)
+SFMC Scout authenticates against `mc.{stack}.exacttarget.com/cloud/fuelapi/...` — an internal proxy that SFMC's own SPA uses for cross-module API calls. It accepts the browser's existing SFMC session cookies, so **no CSRF token capture is required** for the search, browse, and read paths. The moment the user is logged into SFMC in any tab, every read API just works.
 
-On first open, if tokens are not yet cached, the extension opens a minimized background window with SFMC sub-app tabs to trigger token-bearing requests. Tokens are stored locally in `chrome.storage.local` and reused until they expire.
+For the few endpoints that still require a CSRF token (POST creates, PATCH updates, contact-search), the extension passively captures `x-csrf-token` headers from SFMC's own outgoing requests via `webRequest.onBeforeSendHeaders`. **No ghost tabs are opened** — the capture is silent and only fires for headers SFMC itself was already sending. No credentials are stored externally.
+
+#### Migration from ghost tabs (v2.1)
+Prior versions opened a minimized background window with up to four hidden SFMC tabs on first load to force token-bearing requests. v2.1 dropped this entirely after discovering the `/cloud/fuelapi/` cookie-only proxy. See [GHOST_TABS_FIX.md](../CloudPages_Maestro/Chrome_Extension_CPM/GHOST_TABS_FIX.md) (sibling project doc) for the full migration playbook.
+
+### Search performance caps
+Every search type is capped at the top **40 matches** by relevance. With production orgs holding 10k+ assets / 5k+ automations, an uncapped query like `"test"` would overload the server (SFMC's search engine returned `System.OutOfMemoryException` on the wide multi-predicate query). The cap is intentional: the search bar surfaces the closest matches; the dedicated tabs (DE Tools, Automations, Reports) provide full paginated browsing for exhaustive use cases.
+
+The result list groups by type and collapses each group to the top 10 — click "Show all N" to expand a specific group inline.
 
 ### Architecture
 

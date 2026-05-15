@@ -1,6 +1,30 @@
 // handlers/de/DEUsageHandler.js
 import { InstanceService } from '../../utils/InstanceService.js';
 
+// ─── Session-scoped usage index ─────────────────────────────────────────────
+// Keyed by instance (e.g. 'mc.s51'). Rebuilt when stale (> 15 min) or manually
+// invalidated. Survives across multiple DE panel opens within the same SW lifetime.
+const _usageIndex = new Map();
+const INDEX_TTL = 15 * 60 * 1000; // 15 minutes
+
+function _getIndex(instance) {
+    if (!_usageIndex.has(instance)) {
+        _usageIndex.set(instance, {
+            automations: new Map(),      // id → full detail object
+            journeyList: [],             // all journey objects from last full fetch
+            journeyEventDefs: new Map(), // eventDefId → eventDef object
+            automationsTs: null,
+            journeysTs: null
+        });
+    }
+    return _usageIndex.get(instance);
+}
+
+function _isStale(ts) {
+    return !ts || (Date.now() - ts) > INDEX_TTL;
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 const debug = false;
 
 /**
@@ -49,9 +73,9 @@ export async function handleFetchDEUsageQueries(request, sendResponse) {
  * @param {Function} sendResponse 
  */
 export async function handleFetchDEUsageAutomations(request, sendResponse) {
-    const { deId, deName, deKey, instance } = request;
+    const { deName, deKey, instance } = request;
     const stack = (instance || 'mc.s51').replace(/^mc\./, '');
-    const searchTerms = [deId, deName, deKey].filter(Boolean).map(s => s.toLowerCase());
+    const matchSpec = { name: (deName || '').toLowerCase(), key: (deKey || '').toLowerCase() };
 
     try {
         const listUrl = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/automations/automation/definition/` +
@@ -71,7 +95,8 @@ export async function handleFetchDEUsageAutomations(request, sendResponse) {
             const batch = automations.slice(i, i + BATCH_SIZE);
             await Promise.allSettled(batch.map(async (auto) => {
                 try {
-                    const detailUrl = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${auto.id}`;
+                    // view=targetObjects → smaller payload (only steps→activities→targetObject)
+                    const detailUrl = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${auto.id}?view=targetObjects`;
                     const detailResp = await fetch(detailUrl, {
                         credentials: 'include',
                         headers: { 'accept': 'application/json, text/javascript, */*; q=0.01' }
@@ -79,7 +104,7 @@ export async function handleFetchDEUsageAutomations(request, sendResponse) {
                     if (!detailResp.ok) return;
                     const detail = await detailResp.json();
 
-                    if (automationReferencesDE(detail, searchTerms)) {
+                    if (automationReferencesDE(detail, matchSpec)) {
                         matching.push({
                             id: auto.id || detail.id,
                             name: detail.name || auto.name,
@@ -97,18 +122,240 @@ export async function handleFetchDEUsageAutomations(request, sendResponse) {
     }
 }
 
-function automationReferencesDE(automation, searchTerms) {
+/**
+ * Streaming version of automation usage lookup.
+ * Builds (and caches) a full automation detail index in parallel.
+ * Posts progress messages during the first build; subsequent calls within
+ * INDEX_TTL are instant in-memory searches.
+ *
+ * Port message protocol (background → content):
+ *   { type: 'progress', done: N, total: M }   — emitted after each detail settles
+ *   { type: 'result',   data: Array }          — search complete
+ *   { type: 'error',    message: string }      — list fetch failed
+ *
+ * @param {Object} request  — { deId, deName, deKey, instance }
+ * @param {chrome.runtime.Port} port
+ */
+export async function handleFetchDEUsageAutomationsStream(request, port) {
+    const { deName, deKey, instance } = request;
+    const stack = (instance || 'mc.s51').replace(/^mc\./, '');
+    const matchSpec = { name: (deName || '').toLowerCase(), key: (deKey || '').toLowerCase() };
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    port.onDisconnect.addListener(() => controller.abort());
+
+    try {
+        const idx = _getIndex(instance);
+
+        if (_isStale(idx.automationsTs)) {
+            // ── Step A: fetch automation list ───────────────────────────────
+            const listUrl =
+                `https://mc.${stack}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/automations/automation/definition/?$sort=lastRunTime%20desc&view=gridView`;
+            const listResp = await fetch(listUrl, {
+                credentials: 'include',
+                headers: { 'accept': 'application/json, text/javascript, */*; q=0.01' },
+                signal
+            });
+            if (!listResp.ok) throw new Error(`List HTTP ${listResp.status}`);
+            const listData = await listResp.json();
+            const automations = listData.entry || listData.items || [];
+            const total = automations.length;
+            let done = 0;
+
+            // ── Step B: fetch ALL detail requests simultaneously ────────────
+            // view=targetObjects → smaller payload (only steps→activities→targetObject)
+            idx.automations.clear();
+            await Promise.allSettled(
+                automations.map(async (auto) => {
+                    try {
+                        const detailResp = await fetch(
+                            `https://mc.${stack}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${auto.id}?view=targetObjects`,
+                            {
+                                credentials: 'include',
+                                headers: { 'accept': 'application/json, text/javascript, */*; q=0.01' },
+                                signal
+                            }
+                        );
+                        if (detailResp.ok) {
+                            idx.automations.set(auto.id, await detailResp.json());
+                        }
+                    } catch (_) { /* skip this automation */ }
+                    done++;
+                    try { port.postMessage({ type: 'progress', done, total }); } catch (_) {}
+                })
+            );
+
+            // Only stamp the timestamp when the full build completes (not on abort)
+            if (!signal.aborted) idx.automationsTs = Date.now();
+        }
+
+        if (signal.aborted) return;
+
+        // ── Step C: search index in memory ─────────────────────────────────
+        const matching = [];
+        for (const [id, detail] of idx.automations) {
+            if (automationReferencesDE(detail, matchSpec)) {
+                matching.push({
+                    id: detail.id || id,
+                    name: detail.name,
+                    status: detail.status,
+                    lastRunTime: detail.lastRunTime || null
+                });
+            }
+        }
+        port.postMessage({ type: 'result', data: matching });
+
+    } catch (err) {
+        if (err.name === 'AbortError') return;
+        try { port.postMessage({ type: 'error', message: err.message }); } catch (_) {}
+    }
+}
+
+/**
+ * Streaming version of journey usage lookup.
+ * Fetches all journey pages + event definitions (with per-index cache).
+ * Same port message protocol as handleFetchDEUsageAutomationsStream.
+ *
+ * @param {Object} request  — { deId, deName, instance }
+ * @param {chrome.runtime.Port} port
+ */
+export async function handleFetchDEUsageJourneysStream(request, port) {
+    const { deId, deName, instance } = request;
+    if (!deId) { try { port.postMessage({ type: 'error', message: 'Missing DE ID' }); } catch (_) {} return; }
+
+    const rawInstance = instance || 'mc.s51';
+    const INSTANCE = rawInstance.replace(/^mc\./, '');
+    const PAGE_SIZE = 500;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    port.onDisconnect.addListener(() => controller.abort());
+
+    try {
+        const idx = _getIndex(instance);
+
+        if (_isStale(idx.journeysTs)) {
+            // ── Step A: fetch all journey pages ────────────────────────────
+            let page = 1;
+            let fetched = 0;
+            let totalCount = 0;
+            idx.journeyList = [];
+
+            do {
+                const url =
+                    `https://mc.${INSTANCE}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/` +
+                    `?mostRecentVersionOnly=false&mostRecentVersionOrRunningOnly=true` +
+                    `&$page=${page}&$pageSize=${PAGE_SIZE}` +
+                    `&extras=trigger,stats,tag&$orderBy=modifiedDate%20desc`;
+                const resp = await fetch(url, {
+                    headers: { 'accept': 'application/json' },
+                    credentials: 'include',
+                    signal
+                });
+                if (!resp.ok) break;
+                const data = await resp.json();
+                if (page === 1) totalCount = data.count || 0;
+                const items = data.items || [];
+                idx.journeyList.push(...items);
+                fetched += items.length;
+                try { port.postMessage({ type: 'progress', done: fetched, total: totalCount || fetched }); } catch (_) {}
+                if (items.length < PAGE_SIZE || fetched >= totalCount) break;
+                page++;
+            } while (!signal.aborted);
+
+            // ── Step B: bulk-fetch event definitions in a single page ───────
+            // The /eventDefinitions list endpoint accepts $pageSize=1000 and returns
+            // every definition for the BU. One request beats N individual lookups.
+            const evResp = await fetch(
+                `https://mc.${INSTANCE}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions?$sort=createdDate%20desc&$pageSize=1000&$page=1`,
+                { headers: { 'accept': 'application/json' }, credentials: 'include', signal }
+            );
+            if (evResp.ok) {
+                const evData = await evResp.json();
+                for (const ev of (evData.items || [])) {
+                    if (ev.id) idx.journeyEventDefs.set(ev.id, ev);
+                    if (ev.eventDefinitionKey) idx.journeyEventDefs.set(ev.eventDefinitionKey, ev);
+                }
+                try { port.postMessage({ type: 'progress', done: idx.journeyList.length, total: idx.journeyList.length, evDone: (evData.items || []).length, evTotal: (evData.items || []).length }); } catch (_) {}
+            }
+
+            if (!signal.aborted) idx.journeysTs = Date.now();
+        }
+
+        if (signal.aborted) return;
+
+        // ── Step C: search index in memory ─────────────────────────────────
+        const matchingJourneys = [];
+        for (const journey of idx.journeyList) {
+            for (const trigger of (journey.triggers || [])) {
+                // Fast path: dataExtensionId is sometimes inline in trigger metadata
+                const directDeId = trigger.metaData && trigger.metaData.dataExtensionId;
+                if (directDeId && directDeId.toLowerCase() === deId.toLowerCase()) {
+                    matchingJourneys.push({
+                        id: journey.id, name: journey.name, version: journey.version,
+                        eventName: trigger.name || '', eventType: trigger.type || '',
+                        dataExtensionName: deName || ''
+                    });
+                    break;
+                }
+                // Slow path: look up via event definition
+                const evId = trigger.metaData && trigger.metaData.eventDefinitionId;
+                if (!evId) continue;
+                const evDef = idx.journeyEventDefs.get(evId);
+                if (!evDef) continue;
+                const evDeId = evDef.dataExtensionId ||
+                    (evDef.arguments && evDef.arguments.dataExtensionId);
+                if (evDeId && evDeId.toLowerCase() === deId.toLowerCase()) {
+                    matchingJourneys.push({
+                        id: journey.id,
+                        name: journey.name,
+                        version: journey.version,
+                        eventName: evDef.name || trigger.name || '',
+                        eventType: evDef.type || trigger.type || '',
+                        dataExtensionName: evDef.dataExtensionName || deName || ''
+                    });
+                    break; // only include a journey once even if it has multiple matching triggers
+                }
+            }
+        }
+        port.postMessage({ type: 'result', data: matchingJourneys });
+
+    } catch (err) {
+        if (err.name === 'AbortError') return;
+        try { port.postMessage({ type: 'error', message: err.message }); } catch (_) {}
+    }
+}
+
+// Strict structural match — replaces previous "stringify-and-substring" haystack
+// which produced false positives whenever an activity payload happened to contain
+// the DE name (e.g. as a comment, label, or unrelated reference).
+//
+// We match an automation if any activity's targetObject / targetDataExtensions
+// names or keys EXACTLY equal the DE we're searching for (case-insensitive).
+// SQL FROM-clause references are intentionally NOT matched here — those are
+// covered by handleFetchDEUsageQueries which scans queryText.
+function automationReferencesDE(automation, matchSpec) {
+    const { name, key } = matchSpec;
+    const targetMatches = (t) => {
+        if (!t) return false;
+        const tn = (t.name || '').toLowerCase();
+        const tk = (t.key  || t.customerKey || '').toLowerCase();
+        return (key  && (tk === key  || tn === key)) ||
+               (name && (tn === name || tk === name));
+    };
+
     const steps = automation.steps || automation.automationProcesses || [];
     for (const step of steps) {
         const activities = step.activities || step.stepActivities || [];
         for (const act of activities) {
-            // Check targetDataExtensions array
-            const targets = act.targetDataExtensions || [];
-            if (targets.some(de => searchTerms.some(t => (de.name || de.id || '').toLowerCase().includes(t)))) return true;
+            // view=targetObjects exposes act.targetObject directly
+            if (targetMatches(act.targetObject)) return true;
 
-            // Stringify the activity and check for any search term match
-            const combined = JSON.stringify(act).toLowerCase();
-            if (searchTerms.some(term => combined.includes(term))) return true;
+            // Legacy shape: targetDataExtensions[]
+            for (const t of (act.targetDataExtensions || [])) {
+                if (targetMatches(t)) return true;
+            }
         }
     }
     return false;
@@ -158,54 +405,44 @@ export async function handleFetchDEUsageJourneys(request, sendResponse) {
             currentPage++;
         } while (itemsAll.length < totalCount);
 
-        // Step 2: For each journey, fetch its Event Definition to check dataExtensionId.
+        // Step 2: bulk-fetch event definitions once, then resolve in-memory.
         // The trigger's metaData.eventDefinitionId is the only link — the DE reference
-        // is not present in the journey payload itself.
-        const matchingJourneys = [];
-        const eventDefCache = {}; // avoid duplicate fetches within this run
-        const BATCH_SIZE = 5;
-
-        for (let i = 0; i < itemsAll.length; i += BATCH_SIZE) {
-            const batch = itemsAll.slice(i, i + BATCH_SIZE);
-            const results = await Promise.allSettled(batch.map(async (journey) => {
-                if (!journey.triggers || journey.triggers.length === 0) return null;
-                for (const trigger of journey.triggers) {
-                    const eventDefId = trigger.metaData && trigger.metaData.eventDefinitionId;
-                    if (!eventDefId) continue;
-
-                    // Fetch + cache the event definition
-                    if (!eventDefCache[eventDefId]) {
-                        try {
-                            const evUrl = `https://mc.${INSTANCE}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions/${eventDefId}`;
-                            const evResp = await fetch(evUrl, { headers: { "accept": "application/json" }, credentials: "include" });
-                            eventDefCache[eventDefId] = evResp.ok ? await evResp.json() : null;
-                        } catch (_) {
-                            eventDefCache[eventDefId] = null;
-                        }
-                    }
-
-                    const eventDef = eventDefCache[eventDefId];
-                    if (!eventDef) continue;
-
-                    // The DE link is in eventDef.dataExtensionId or eventDef.arguments.dataExtensionId
-                    const eventDeId = eventDef.dataExtensionId ||
-                        (eventDef.arguments && eventDef.arguments.dataExtensionId);
-                    if (eventDeId && eventDeId.toLowerCase() === deId.toLowerCase()) {
-                        return {
-                            id: journey.id,
-                            name: journey.name,
-                            version: journey.version,
-                            eventName: eventDef.name || trigger.name || '',
-                            eventType: eventDef.type || trigger.type || '',
-                            dataExtensionName: eventDef.dataExtensionName || deName || ''
-                        };
-                    }
+        // is not present in the journey payload itself, it lives in the event definition.
+        const eventDefIndex = {};
+        try {
+            const bulkUrl = `https://mc.${INSTANCE}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions?$sort=createdDate%20desc&$pageSize=1000&$page=1`;
+            const bulkResp = await fetch(bulkUrl, { headers: { "accept": "application/json" }, credentials: "include" });
+            if (bulkResp.ok) {
+                const bulkData = await bulkResp.json();
+                for (const ev of (bulkData.items || [])) {
+                    if (ev.id) eventDefIndex[ev.id] = ev;
+                    if (ev.eventDefinitionKey) eventDefIndex[ev.eventDefinitionKey] = ev;
                 }
-                return null;
-            }));
+            }
+        } catch (_) { /* fall through with empty index */ }
 
-            for (const r of results) {
-                if (r.status === 'fulfilled' && r.value) matchingJourneys.push(r.value);
+        const matchingJourneys = [];
+        for (const journey of itemsAll) {
+            for (const trigger of (journey.triggers || [])) {
+                const eventDefId = trigger.metaData && trigger.metaData.eventDefinitionId;
+                if (!eventDefId) continue;
+                const eventDef = eventDefIndex[eventDefId];
+                if (!eventDef) continue;
+
+                // The DE link is in eventDef.dataExtensionId or eventDef.arguments.dataExtensionId
+                const eventDeId = eventDef.dataExtensionId ||
+                    (eventDef.arguments && eventDef.arguments.dataExtensionId);
+                if (eventDeId && eventDeId.toLowerCase() === deId.toLowerCase()) {
+                    matchingJourneys.push({
+                        id: journey.id,
+                        name: journey.name,
+                        version: journey.version,
+                        eventName: eventDef.name || trigger.name || '',
+                        eventType: eventDef.type || trigger.type || '',
+                        dataExtensionName: eventDef.dataExtensionName || deName || ''
+                    });
+                    break; // only include a journey once even if multiple triggers match
+                }
             }
         }
 
@@ -250,3 +487,18 @@ export async function handleFetchJourneyEventDefinition(request, sendResponse) {
     }
 }
 
+/**
+ * Invalidate the session index for a specific type so the next expand
+ * triggers a fresh build.
+ *
+ * @param {Object} request  — { instance, indexType: 'automations' | 'journeys' }
+ * @param {Function} sendResponse
+ */
+export function handleInvalidateUsageIndex(request, sendResponse) {
+    const idx = _usageIndex.get(request.instance);
+    if (idx) {
+        if (request.indexType === 'automations') idx.automationsTs = null;
+        if (request.indexType === 'journeys')    idx.journeysTs = null;
+    }
+    sendResponse({ success: true });
+}

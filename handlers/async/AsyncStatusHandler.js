@@ -14,7 +14,7 @@ export async function handleCheckAsyncStatus(request, sendResponse) {
         const { activityId } = request;
         const instance = await InstanceService.getInstance();
 
-        const url = `https://${instance}.marketingcloudapps.com/contactsmeta/fuelapi/internal/v1/async/asyncactivitylog/${activityId}/310`;
+        const url = `https://${instance}.exacttarget.com/cloud/fuelapi/internal/v1/async/asyncactivitylog/${activityId}/310`;
 
         let response = await fetch(url, {
             method: 'GET',

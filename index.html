@@ -1,0 +1,1852 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>SFMC Scout Documentation</title>
+   <link rel="icon" type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232f81f7' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E">
+   <link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/iconoir-icons/iconoir@main/css/iconoir.css">
+   <link rel="preconnect" href="https://fonts.googleapis.com">
+   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+   <style>
+      /* ───────────────────────────────────────────────────────────────
+         SFMC SCOUT — TECHNICAL DOCUMENTATION
+         Design system: tight modular scale, paper-and-ink palette,
+         editorial typography. No AI-generic gradients or floating
+         blobs. Hardware-accelerated transforms only.
+         ─────────────────────────────────────────────────────────────── */
+
+      *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+      :root {
+         /* Type scale — major third (1.20) */
+         --fs-12: 0.75rem;
+         --fs-13: 0.8125rem;
+         --fs-14: 0.875rem;
+         --fs-15: 0.9375rem;
+         --fs-16: 1rem;
+         --fs-18: 1.125rem;
+         --fs-20: 1.25rem;
+         --fs-24: 1.5rem;
+         --fs-30: 1.875rem;
+         --fs-38: 2.375rem;
+         --fs-48: 3rem;
+
+         /* Spacing — 4px grid */
+         --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+         --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+         --sp-9: 96px;
+
+         /* Radii */
+         --r-2: 4px; --r-3: 6px; --r-4: 10px; --r-5: 14px;
+
+         /* Layout */
+         --sidebar-w: 280px;
+         --toc-w: 240px;
+         --content-w: 760px;
+
+         /* Type families */
+         --ff-sans: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif;
+         --ff-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+      }
+
+      :root[data-theme="light"] {
+         --bg-0: #fafaf7;          /* page (paper) */
+         --bg-1: #ffffff;          /* surfaces */
+         --bg-2: #f3f2ed;          /* raised */
+         --bg-code: #f6f5f0;       /* code blocks */
+         --border-1: #e7e5dd;      /* hairline */
+         --border-2: #d4d1c6;      /* strong */
+         --text-1: #0f1115;        /* ink */
+         --text-2: #4b5260;        /* body */
+         --text-3: #7a7f8a;        /* muted */
+         --accent: #2563eb;
+         --accent-hi: #1d4ed8;
+         --accent-tint: rgba(37, 99, 235, 0.08);
+         --success: #1f7a3a;
+         --warning: #b06f00;
+         --danger: #c0322a;
+         --info: #1e64c8;
+         --shadow-1: 0 1px 2px rgba(15,17,21,0.04);
+         --shadow-2: 0 4px 16px rgba(15,17,21,0.06);
+         --grid-line: rgba(15,17,21,0.03);
+      }
+
+      :root[data-theme="dark"] {
+         --bg-0: #0a0b0d;
+         --bg-1: #111316;
+         --bg-2: #181b20;
+         --bg-code: #0d1014;
+         --border-1: #1f242c;
+         --border-2: #2c333d;
+         --text-1: #e8eaed;
+         --text-2: #a8afb8;
+         --text-3: #6b727b;
+         --accent: #4d8eff;
+         --accent-hi: #7ba6ff;
+         --accent-tint: rgba(77, 142, 255, 0.12);
+         --success: #3fb950;
+         --warning: #d29922;
+         --danger: #f85149;
+         --info: #58a6ff;
+         --shadow-1: 0 1px 2px rgba(0,0,0,0.4);
+         --shadow-2: 0 8px 24px rgba(0,0,0,0.4);
+         --grid-line: rgba(255,255,255,0.02);
+      }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+         font-family: var(--ff-sans);
+         font-feature-settings: 'cv11', 'ss01', 'ss03';
+         font-size: var(--fs-15);
+         line-height: 1.65;
+         color: var(--text-1);
+         background-color: var(--bg-0);
+         background-image:
+            linear-gradient(var(--grid-line) 1px, transparent 1px),
+            linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+         background-size: 32px 32px;
+         min-height: 100vh;
+         -webkit-font-smoothing: antialiased;
+         -moz-osx-font-smoothing: grayscale;
+         text-rendering: optimizeLegibility;
+      }
+
+      ::selection { background: var(--accent-tint); color: var(--text-1); }
+
+      /* ─── SIDEBAR ─────────────────────────────────────────────────── */
+
+      .sidebar {
+         width: var(--sidebar-w);
+         background: var(--bg-1);
+         border-right: 1px solid var(--border-1);
+         padding: var(--sp-5) 0 var(--sp-5);
+         position: fixed;
+         inset: 0 auto 0 0;
+         overflow-y: auto;
+         overscroll-behavior: contain;
+         z-index: 100;
+      }
+
+      .sidebar-header {
+         padding: 0 var(--sp-5) var(--sp-5);
+         border-bottom: 1px solid var(--border-1);
+         position: relative;
+      }
+
+      .sidebar-logo {
+         width: 64px;
+         height: 64px;
+         margin: 0 auto var(--sp-3);
+         display: block;
+         filter: contrast(1.05);
+      }
+
+      .sidebar-title {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-18);
+         font-weight: 600;
+         letter-spacing: -0.02em;
+         color: var(--text-1);
+         text-align: center;
+         margin-bottom: var(--sp-1);
+      }
+
+      .sidebar-subtitle {
+         font-family: var(--ff-mono);
+         font-size: var(--fs-12);
+         font-weight: 500;
+         text-transform: uppercase;
+         letter-spacing: 0.08em;
+         color: var(--text-3);
+         text-align: center;
+      }
+
+      .sidebar-author {
+         font-family: var(--ff-mono);
+         font-size: 11px;
+         color: var(--text-3);
+         margin-top: var(--sp-3);
+         padding-top: var(--sp-3);
+         border-top: 1px solid var(--border-1);
+         text-align: center;
+         letter-spacing: 0.02em;
+      }
+
+      .sidebar-nav { padding: var(--sp-5) 0 var(--sp-7); }
+      .nav-section { margin-bottom: var(--sp-5); }
+
+      .nav-section-title {
+         font-family: var(--ff-mono);
+         font-size: 11px;
+         font-weight: 600;
+         text-transform: uppercase;
+         letter-spacing: 0.1em;
+         color: var(--text-3);
+         padding: 0 var(--sp-5);
+         margin-bottom: var(--sp-2);
+      }
+
+      .nav-links { list-style: none; }
+
+      .nav-link {
+         display: flex;
+         align-items: center;
+         gap: var(--sp-2);
+         position: relative;
+         padding: 6px var(--sp-5) 6px calc(var(--sp-5) + var(--sp-3));
+         color: var(--text-2);
+         text-decoration: none;
+         font-size: var(--fs-14);
+         line-height: 1.4;
+         transition: color 120ms ease, background 120ms ease;
+         will-change: transform;
+      }
+
+      .nav-link::before {
+         content: '';
+         position: absolute;
+         left: var(--sp-5);
+         top: 50%;
+         transform: translateY(-50%);
+         width: 3px;
+         height: 3px;
+         border-radius: 50%;
+         background: transparent;
+         transition: background 120ms ease, transform 120ms ease;
+      }
+
+      .nav-link:hover {
+         color: var(--text-1);
+         background: var(--bg-2);
+      }
+
+      .nav-link.active {
+         color: var(--accent);
+         font-weight: 500;
+      }
+
+      .nav-link.active::before {
+         background: var(--accent);
+         transform: translateY(-50%) scale(1.6);
+      }
+
+      /* ─── THEME TOGGLE ────────────────────────────────────────────── */
+
+      .theme-toggle {
+         position: fixed;
+         top: var(--sp-4);
+         right: var(--sp-4);
+         width: 36px;
+         height: 36px;
+         display: inline-flex;
+         align-items: center;
+         justify-content: center;
+         background: var(--bg-1);
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-3);
+         cursor: pointer;
+         color: var(--text-1);
+         font-size: var(--fs-16);
+         z-index: 200;
+         transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      .theme-toggle:hover {
+         border-color: var(--border-2);
+         transform: translateY(-1px);
+      }
+
+      .theme-toggle:active { transform: translateY(0); }
+
+      /* ─── LAYOUT ──────────────────────────────────────────────────── */
+
+      .main-wrapper {
+         margin-left: var(--sidebar-w);
+         min-height: 100vh;
+         position: relative;
+      }
+
+      .content {
+         max-width: var(--content-w);
+         padding: var(--sp-8) var(--sp-7) var(--sp-9);
+         margin: 0 auto;
+      }
+
+      @media (min-width: 1280px) {
+         .content { margin-left: max(var(--sp-7), calc((100vw - var(--sidebar-w) - var(--toc-w) - var(--content-w)) / 2)); margin-right: 0; }
+      }
+
+      /* ─── BREADCRUMB ──────────────────────────────────────────────── */
+
+      .breadcrumb {
+         font-family: var(--ff-mono);
+         font-size: var(--fs-12);
+         font-weight: 500;
+         text-transform: uppercase;
+         letter-spacing: 0.08em;
+         color: var(--text-3);
+         margin-bottom: var(--sp-6);
+      }
+
+      .breadcrumb a {
+         color: var(--text-3);
+         text-decoration: none;
+         transition: color 120ms ease;
+      }
+      .breadcrumb a:hover { color: var(--accent); }
+
+      /* ─── TYPOGRAPHY ──────────────────────────────────────────────── */
+
+      h1 {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-48);
+         font-weight: 600;
+         line-height: 1.05;
+         letter-spacing: -0.035em;
+         color: var(--text-1);
+         margin-bottom: var(--sp-4);
+      }
+
+      .overview-logo {
+         width: 96px;
+         height: 96px;
+         margin: 0 auto var(--sp-5);
+         display: block;
+      }
+
+      .page-description {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-20);
+         font-weight: 400;
+         line-height: 1.45;
+         letter-spacing: -0.015em;
+         color: var(--text-2);
+         margin-bottom: var(--sp-6);
+      }
+
+      h2 {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-30);
+         font-weight: 600;
+         line-height: 1.2;
+         letter-spacing: -0.025em;
+         color: var(--text-1);
+         margin: var(--sp-9) 0 var(--sp-4);
+         scroll-margin-top: var(--sp-5);
+         position: relative;
+         padding-top: var(--sp-5);
+         border-top: 1px solid var(--border-1);
+      }
+
+      section:first-of-type h2 {
+         margin-top: var(--sp-6);
+         padding-top: 0;
+         border-top: 0;
+      }
+
+      h3 {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-20);
+         font-weight: 600;
+         line-height: 1.3;
+         letter-spacing: -0.015em;
+         color: var(--text-1);
+         margin: var(--sp-7) 0 var(--sp-3);
+         scroll-margin-top: var(--sp-5);
+      }
+
+      h4 {
+         font-family: var(--ff-sans);
+         font-size: var(--fs-16);
+         font-weight: 600;
+         color: var(--text-1);
+         margin: var(--sp-5) 0 var(--sp-2);
+      }
+
+      p {
+         font-size: var(--fs-15);
+         line-height: 1.7;
+         color: var(--text-2);
+         margin-bottom: var(--sp-4);
+      }
+
+      p strong { color: var(--text-1); font-weight: 600; }
+
+      /* ─── INLINE & BLOCK CODE ─────────────────────────────────────── */
+
+      code {
+         font-family: var(--ff-mono);
+         font-size: 0.85em;
+         font-weight: 500;
+         background: var(--bg-code);
+         color: var(--text-1);
+         padding: 1px 6px;
+         border-radius: var(--r-2);
+         border: 1px solid var(--border-1);
+      }
+
+      pre {
+         font-family: var(--ff-mono);
+         background: var(--bg-code);
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-4);
+         padding: 0;
+         margin: var(--sp-4) 0;
+         overflow: hidden;
+         position: relative;
+         box-shadow: var(--shadow-1);
+      }
+
+      pre::before {
+         content: '$';
+         position: absolute;
+         top: 14px;
+         left: 16px;
+         font-family: var(--ff-mono);
+         font-size: var(--fs-12);
+         color: var(--text-3);
+         font-weight: 500;
+      }
+
+      pre code {
+         display: block;
+         font-size: var(--fs-13);
+         line-height: 1.65;
+         padding: var(--sp-3) var(--sp-4) var(--sp-3) calc(var(--sp-4) + 14px);
+         background: none;
+         border: 0;
+         border-radius: 0;
+         color: var(--text-1);
+         overflow-x: auto;
+      }
+
+      /* ─── CALLOUTS ────────────────────────────────────────────────── */
+
+      .callout {
+         display: grid;
+         grid-template-columns: auto 1fr;
+         gap: var(--sp-4);
+         padding: var(--sp-4) var(--sp-5);
+         margin: var(--sp-5) 0;
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-4);
+         background: var(--bg-1);
+         position: relative;
+      }
+
+      .callout::before {
+         content: '';
+         position: absolute;
+         left: 0;
+         top: 0;
+         bottom: 0;
+         width: 3px;
+         border-radius: var(--r-4) 0 0 var(--r-4);
+      }
+
+      .callout-info::before    { background: var(--info); }
+      .callout-warning::before { background: var(--warning); }
+      .callout-danger::before  { background: var(--danger); }
+      .callout-success::before { background: var(--success); }
+
+      .callout-title {
+         grid-column: 1 / -1;
+         display: inline-flex;
+         align-items: center;
+         gap: var(--sp-2);
+         font-family: var(--ff-mono);
+         font-size: var(--fs-12);
+         font-weight: 600;
+         text-transform: uppercase;
+         letter-spacing: 0.08em;
+         margin-bottom: var(--sp-1);
+      }
+
+      .callout-title i {
+         font-size: var(--fs-16);
+         font-style: normal;
+      }
+
+      .callout-info    .callout-title { color: var(--info); }
+      .callout-warning .callout-title { color: var(--warning); }
+      .callout-danger  .callout-title { color: var(--danger); }
+      .callout-success .callout-title { color: var(--success); }
+
+      .callout p {
+         grid-column: 1 / -1;
+         font-size: var(--fs-14);
+         color: var(--text-2);
+         margin: 0;
+         line-height: 1.6;
+      }
+
+      .callout p + p { margin-top: var(--sp-2); }
+
+      /* ─── TABLES ──────────────────────────────────────────────────── */
+
+      table {
+         width: 100%;
+         border-collapse: collapse;
+         margin: var(--sp-5) 0;
+         font-size: var(--fs-14);
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-3);
+         overflow: hidden;
+      }
+
+      th {
+         background: var(--bg-2);
+         padding: 10px var(--sp-3);
+         text-align: left;
+         font-family: var(--ff-mono);
+         font-size: var(--fs-12);
+         font-weight: 600;
+         text-transform: uppercase;
+         letter-spacing: 0.06em;
+         color: var(--text-2);
+         border-bottom: 1px solid var(--border-1);
+      }
+
+      td {
+         padding: 10px var(--sp-3);
+         border-bottom: 1px solid var(--border-1);
+         color: var(--text-2);
+         vertical-align: top;
+      }
+
+      tr:last-child td { border-bottom: 0; }
+      tr:nth-child(even) td { background: color-mix(in oklab, var(--bg-1), var(--bg-2) 30%); }
+
+      td code, th code { background: var(--bg-0); }
+
+      /* ─── BADGES (HTTP METHODS) ───────────────────────────────────── */
+
+      .badge {
+         display: inline-flex;
+         align-items: center;
+         padding: 2px 8px;
+         border-radius: var(--r-2);
+         font-family: var(--ff-mono);
+         font-size: 11px;
+         font-weight: 600;
+         letter-spacing: 0.04em;
+         margin-right: var(--sp-2);
+         border: 1px solid transparent;
+      }
+
+      [data-theme="dark"] .badge-get    { background: rgba(77,142,255,0.15);  color: #7ba6ff; border-color: rgba(77,142,255,0.3); }
+      [data-theme="dark"] .badge-post   { background: rgba(63,185,80,0.15);   color: #5dd97a; border-color: rgba(63,185,80,0.3); }
+      [data-theme="dark"] .badge-patch  { background: rgba(210,153,34,0.15);  color: #e5b54a; border-color: rgba(210,153,34,0.3); }
+      [data-theme="dark"] .badge-delete { background: rgba(248,81,73,0.15);   color: #ff7a72; border-color: rgba(248,81,73,0.3); }
+
+      [data-theme="light"] .badge-get    { background: rgba(30,100,200,0.08); color: #1e64c8; border-color: rgba(30,100,200,0.2); }
+      [data-theme="light"] .badge-post   { background: rgba(31,122,58,0.08);  color: #1f7a3a; border-color: rgba(31,122,58,0.2); }
+      [data-theme="light"] .badge-patch  { background: rgba(176,111,0,0.08);  color: #b06f00; border-color: rgba(176,111,0,0.2); }
+      [data-theme="light"] .badge-delete { background: rgba(192,50,42,0.08);  color: #c0322a; border-color: rgba(192,50,42,0.2); }
+
+      /* ─── MERMAID DIAGRAMS ────────────────────────────────────────── */
+
+      .mermaid {
+         background: var(--bg-1);
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-4);
+         padding: var(--sp-5);
+         margin: var(--sp-5) 0;
+         box-shadow: var(--shadow-1);
+      }
+
+      /* ─── LISTS & LINKS ───────────────────────────────────────────── */
+
+      ul, ol {
+         margin: var(--sp-3) 0 var(--sp-4);
+         padding-left: var(--sp-5);
+         color: var(--text-2);
+      }
+
+      li {
+         margin: var(--sp-2) 0;
+         font-size: var(--fs-15);
+         line-height: 1.65;
+      }
+
+      li::marker { color: var(--text-3); }
+
+      a {
+         color: var(--accent);
+         text-decoration: none;
+         border-bottom: 1px solid transparent;
+         transition: border-color 120ms ease, color 120ms ease;
+      }
+
+      a:hover {
+         color: var(--accent-hi);
+         border-bottom-color: currentColor;
+      }
+
+      /* ─── SCROLLBAR ───────────────────────────────────────────────── */
+
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+      /* ─── FEATURE GRID ────────────────────────────────────────────── */
+
+      .feature-grid {
+         display: grid;
+         grid-template-columns: 1fr 1fr;
+         gap: 1px;
+         margin: var(--sp-5) 0;
+         background: var(--border-1);
+         border: 1px solid var(--border-1);
+         border-radius: var(--r-4);
+         overflow: hidden;
+      }
+
+      .feature-card {
+         background: var(--bg-1);
+         padding: var(--sp-5);
+         transition: background 150ms ease;
+         position: relative;
+      }
+
+      .feature-card:hover { background: var(--bg-2); }
+
+      .feature-card::before {
+         content: '';
+         position: absolute;
+         top: var(--sp-5);
+         left: var(--sp-5);
+         width: 12px;
+         height: 1px;
+         background: var(--accent);
+      }
+
+      .feature-card h4 {
+         color: var(--text-1);
+         margin: var(--sp-3) 0 var(--sp-2);
+         font-size: var(--fs-15);
+         font-weight: 600;
+         display: flex;
+         align-items: center;
+         gap: var(--sp-2);
+         letter-spacing: -0.01em;
+      }
+
+      .feature-card h4 i {
+         color: var(--accent);
+         font-size: var(--fs-18);
+      }
+
+      .feature-card p {
+         font-size: var(--fs-14);
+         line-height: 1.55;
+         margin: 0;
+         color: var(--text-2);
+      }
+
+      /* ─── RIGHT-RAIL TOC ──────────────────────────────────────────── */
+
+      .toc-rail {
+         position: fixed;
+         top: var(--sp-7);
+         right: var(--sp-6);
+         width: var(--toc-w);
+         max-height: calc(100vh - var(--sp-8));
+         overflow-y: auto;
+         padding: 0 var(--sp-4) var(--sp-5);
+         display: none;
+         z-index: 50;
+      }
+
+      @media (min-width: 1280px) {
+         .toc-rail { display: block; }
+      }
+
+      .toc-label {
+         font-family: var(--ff-mono);
+         font-size: 11px;
+         font-weight: 600;
+         text-transform: uppercase;
+         letter-spacing: 0.1em;
+         color: var(--text-3);
+         margin-bottom: var(--sp-3);
+         padding-bottom: var(--sp-2);
+         border-bottom: 1px solid var(--border-1);
+      }
+
+      .toc-list { list-style: none; padding: 0; margin: 0; }
+
+      .toc-list li { margin: 0; padding: 0; }
+
+      .toc-list a {
+         display: block;
+         padding: 4px 0 4px var(--sp-3);
+         font-size: var(--fs-13);
+         line-height: 1.45;
+         color: var(--text-3);
+         text-decoration: none;
+         border-left: 1px solid var(--border-1);
+         border-bottom: 0;
+         transition: color 120ms ease, border-color 120ms ease;
+      }
+
+      .toc-list a.h3 { padding-left: calc(var(--sp-3) + var(--sp-3)); }
+
+      .toc-list a:hover { color: var(--text-1); border-left-color: var(--border-2); }
+      .toc-list a.active { color: var(--accent); border-left-color: var(--accent); }
+
+      /* ─── RESPONSIVE ──────────────────────────────────────────────── */
+
+      @media (max-width: 1023px) {
+         .sidebar { transform: translateX(-100%); transition: transform 200ms ease; }
+         .sidebar.open { transform: translateX(0); }
+         .main-wrapper { margin-left: 0; }
+         .content { padding: var(--sp-6) var(--sp-5) var(--sp-7); }
+         h1 { font-size: var(--fs-38); }
+         h2 { font-size: var(--fs-24); margin: var(--sp-7) 0 var(--sp-3); padding-top: var(--sp-4); }
+      }
+
+      @media (max-width: 640px) {
+         .feature-grid { grid-template-columns: 1fr; }
+         h1 { font-size: var(--fs-30); }
+         .page-description { font-size: var(--fs-16); }
+         pre code { font-size: 12px; }
+      }
+
+      /* ─── PRINT ───────────────────────────────────────────────────── */
+
+      @media print {
+         .sidebar, .toc-rail, .theme-toggle { display: none; }
+         .main-wrapper { margin: 0; }
+         body { background: white; color: black; }
+      }
+   </style>
+</head>
+<body>
+   <!-- Theme Toggle -->
+   <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+      <i class="iconoir-half-moon"></i>
+   </button>
+
+   <!-- Sidebar -->
+   <aside class="sidebar">
+      <div class="sidebar-header">
+         <img src="icons/scout_logo.png" alt="SFMC Scout" class="sidebar-logo">
+         <div class="sidebar-title">SFMC Scout</div>
+         <div class="sidebar-subtitle">v2.0.0 Documentation</div>
+         <div class="sidebar-author">© 2026 Aldorino Rrushi</div>
+      </div>
+      <nav class="sidebar-nav">
+         <div class="nav-section">
+            <div class="nav-section-title">Getting Started</div>
+            <ul class="nav-links">
+               <li><a href="#overview" class="nav-link active">Overview</a></li>
+               <li><a href="#features" class="nav-link">Features</a></li>
+               <li><a href="#installation" class="nav-link">Installation</a></li>
+            </ul>
+         </div>
+         <div class="nav-section">
+            <div class="nav-section-title">Architecture</div>
+            <ul class="nav-links">
+               <li><a href="#architecture" class="nav-link">System Design</a></li>
+               <li><a href="#tokens" class="nav-link">Token System</a></li>
+               <li><a href="#data-flow" class="nav-link">Data Flow</a></li>
+            </ul>
+         </div>
+         <div class="nav-section">
+            <div class="nav-section-title">API Reference</div>
+            <ul class="nav-links">
+               <li><a href="#endpoints" class="nav-link">Endpoints</a></li>
+               <li><a href="#authentication" class="nav-link">Authentication</a></li>
+            </ul>
+         </div>
+         <div class="nav-section">
+            <div class="nav-section-title">Features</div>
+            <ul class="nav-links">
+               <li><a href="#search" class="nav-link">Universal Search</a></li>
+               <li><a href="#automations" class="nav-link">Automations</a></li>
+               <li><a href="#data-extensions" class="nav-link">Data Extensions</a></li>
+               <li><a href="#journeys" class="nav-link">Journeys</a></li>
+               <li><a href="#reports" class="nav-link">Reports</a></li>
+               <li><a href="#snippets" class="nav-link">Snippets</a></li>
+            </ul>
+         </div>
+         <div class="nav-section">
+            <div class="nav-section-title">Resources</div>
+            <ul class="nav-links">
+               <li><a href="#security" class="nav-link">Security &amp; Privacy</a></li>
+               <li><a href="#limitations" class="nav-link">Limitations</a></li>
+               <li><a href="#troubleshooting" class="nav-link">Troubleshooting</a></li>
+               <li><a href="#specs" class="nav-link">Technical Specs</a></li>
+            </ul>
+         </div>
+      </nav>
+   </aside>
+
+   <!-- Main Content -->
+   <div class="main-wrapper">
+      <main class="content">
+         <div class="breadcrumb">
+            <a href="#overview">Documentation</a> / Overview
+         </div>
+
+         <!-- OVERVIEW -->
+         <section id="overview">
+            <img src="icons/scout_logo.png" alt="SFMC Scout" class="overview-logo">
+            <h2 style="text-align: center; margin-bottom: 1rem; margin-top: 0;">SFMC Scout</h2>
+            <p class="page-description" style="text-align: center;">
+               Universal Chrome Extension for Salesforce Marketing Cloud — search, inspect, manage, and export your entire SFMC instance from a persistent side panel. No login required.
+            </p>
+
+            <div class="callout callout-success">
+               <div class="callout-title"><i class="iconoir-search"></i> What is SFMC Scout?</div>
+               <p>SFMC Scout injects a persistent side panel into any SFMC page. It uses your active browser session (cookies, no CSRF tokens) to reach SFMC's internal cookie-only proxy at <code>mc.{stack}.exacttarget.com/cloud/fuelapi/...</code> — giving you instant access to Automations, Data Extensions, Journeys, Assets, Activities, Snippets, and cross-entity full-text search without navigating away.</p>
+            </div>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-sparks"></i> What's new in v2.1</div>
+               <p><strong>Cookie-only architecture.</strong> Ghost tabs eliminated — Scout no longer spawns minimized popup windows to capture per-section CSRF tokens. All read APIs now route through SFMC's internal cookie-authenticated proxy.</p>
+               <p><strong>Server-side search filters.</strong> Universal Search now uses real server filters (<code>$where=name like X</code>, <code>nameOrDescription</code>, <code>$filter</code>) instead of client-side filtering. Returns full matches even on production orgs with 5,000+ automations / 400+ journeys.</p>
+               <p><strong>DE folder-path correctness.</strong> Search now walks the Shared Items folder tree with <code>includeFullPath=true</code>, so cross-BU and shared-subfolder DEs show their real path (no more <code>[Unknown Folder]</code>).</p>
+               <p><strong>UI polish.</strong> Light mode is now the default. Theme toggle is single-click responsive. Toasts are theme-aware with a 2-second default, icon chip status (no green left border).</p>
+            </div>
+         </section>
+
+         <!-- FEATURES -->
+         <section id="features">
+            <h2>Features</h2>
+
+            <div class="feature-grid">
+               <div class="feature-card">
+                  <h4><i class="iconoir-search"></i> Universal Search</h4>
+                  <p>Search across DEs, Automations, Journeys, Emails, Assets, and Activities simultaneously — streaming results in real-time.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-play-outline"></i> Automation Inspector</h4>
+                  <p>Browse automations with status badges. Click any automation to view its full step breakdown with syntax-highlighted SQL and SSJS.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-database"></i> Data Extension Tools</h4>
+                  <p>Search, create, export (JSON/ZIP), import, and generate reports for all Data Extensions in your instance.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-git-fork"></i> Journeys</h4>
+                  <p>Browse all active and draft journeys with color-coded status badges, version numbers, and channel display.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-reports"></i> HTML Reports</h4>
+                  <p>Generate standalone HTML reports with live filter, sortable columns, dark/light theme, and export to CSV.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-code"></i> Snippets</h4>
+                  <p>Save, tag, and deploy reusable AMPscript, SSJS, and SQL snippets directly into SFMC Ace editors.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-half-moon"></i> Dark / Light Mode</h4>
+                  <p>Toggleable theme persisted across sessions. Dark mode by default; applies to the panel and all generated reports.</p>
+               </div>
+               <div class="feature-card">
+                  <h4><i class="iconoir-lock"></i> No Login Required</h4>
+                  <p>Tokens captured passively from the active SFMC session. No credentials entered or stored externally.</p>
+               </div>
+            </div>
+         </section>
+
+         <!-- INSTALLATION -->
+         <section id="installation">
+            <h2>Installation</h2>
+
+            <div class="callout callout-warning">
+               <div class="callout-title"><i class="iconoir-warning-triangle"></i> Developer Mode Required</div>
+               <p>SFMC Scout is a developer tool for internal use. It is not published on the Chrome Web Store and must be loaded via Developer mode.</p>
+            </div>
+
+            <ol>
+               <li>Download or clone the repository</li>
+               <li>Open Chrome and navigate to <code>chrome://extensions/</code></li>
+               <li>Enable <strong>Developer mode</strong> (toggle in the top-right corner)</li>
+               <li>Click <strong>Load unpacked</strong></li>
+               <li>Select the <code>SFMC_Scout/</code> folder (the one containing <code>manifest.json</code>)</li>
+               <li>Verify the extension appears with the Scout icon</li>
+               <li>Navigate to any SFMC page — the <strong>Scout</strong> toggle button will appear on the right edge of the screen</li>
+            </ol>
+
+            <h3>First Use</h3>
+            <ol>
+               <li>Click the <strong>Scout</strong> tab on the right edge to open the panel</li>
+               <li>On first open, Scout automatically captures tokens from your active session</li>
+               <li>If tokens are missing, Scout opens minimized background tabs to trigger token capture</li>
+               <li>Once all token badges show green, all features are available</li>
+            </ol>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-info-circle"></i> SFMC Stack Support</div>
+               <p>Scout auto-detects your SFMC stack from the active tab URL (e.g. <code>mc.s51.exacttarget.com</code> → stack <code>s51</code>). Stacks s1 through s51 are supported plus custom configurations.</p>
+            </div>
+         </section>
+
+         <!-- ARCHITECTURE -->
+         <section id="architecture">
+            <h2>Architecture</h2>
+            <p>SFMC Scout uses a modular, layered architecture. The content script handles all UI rendering and event handling; the background service worker handles token interception, CORS proxy, and message routing; specialized handlers in <code>handlers/</code> implement per-entity business logic.</p>
+
+            <div class="mermaid">
+graph TB
+   SFMC[SFMC Page DOM]
+   CS[content.js — Panel UI + State]
+   BG[background.js — Service Worker]
+   HND[handlers/ — Search, DE, Automation, Journey]
+   SVC[services/ — DE Create/Export/Import/Report]
+   UTL[utils/ — API, Token, Instance, Storage]
+   API[SFMC REST APIs]
+
+   SFMC --> CS
+   CS --> BG
+   BG --> HND
+   BG --> SVC
+   BG --> UTL
+   UTL --> API
+   HND --> API
+   SVC --> API
+
+   style CS fill:#2563eb,stroke:#2563eb,color:#fff
+   style BG fill:#1f7a3a,stroke:#1f7a3a,color:#fff
+   style HND fill:#b06f00,stroke:#b06f00,color:#fff
+   style SVC fill:#6b21a8,stroke:#6b21a8,color:#fff
+   style API fill:#c0322a,stroke:#c0322a,color:#fff
+            </div>
+
+            <h3>File Structure</h3>
+            <pre><code>SFMC_Scout/
+├── manifest.json           MV3 config (permissions, scripts, icons)
+├── content.js              Panel UI, state (S), event handling (~2,800 lines)
+├── background.js           Service worker: webRequest, CORS proxy, message hub
+├── panel.css               All panel + component styles
+├── injected_script.js      Page-injected: SnippetManager + AceEditorHelper
+│
+├── handlers/
+│   ├── search/             Per-entity search services (Auto, Journey, DE, Asset, Activity)
+│   ├── automation/         Automation detail, activity code, type registry
+│   ├── de/                 DE folder service, field definitions, usage detection
+│   ├── actions/            Quick action routes (create, export, import, report)
+│   └── auth/               Token refresh coordination
+│
+├── services/
+│   ├── DECreationService.js    Create DEs via REST
+│   ├── DEExportService.js      Paginated export with folder resolution
+│   ├── DEImportService.js      Restore from JSON with folder re-creation
+│   └── DEReportService.js      HTML / CSV report generation
+│
+├── utils/
+│   ├── InstanceService.js      Stack detection from hostname
+│   ├── APIService.js           Authenticated fetch wrapper (CORS proxy)
+│   ├── TokenService.js         Token classification and key mapping
+│   ├── CSRFService.js          Token retrieval from chrome.storage
+│   └── StorageService.js       chrome.storage.local helpers
+│
+└── core/
+    ├── SnippetManager.js       Snippet storage + Ace deploy
+    └── AceEditorHelper.js      Ace editor detection and injection</code></pre>
+         </section>
+
+         <!-- TOKEN SYSTEM -->
+         <section id="tokens">
+            <h2>Authentication Model</h2>
+            <p>Scout uses your active SFMC browser session via cookies — no credentials are entered, no per-section CSRF tokens are required for read APIs, and no external auth servers are involved. The cookie-only proxy at <code>mc.{stack}.exacttarget.com/cloud/fuelapi/...</code> accepts the same session cookies your browser already holds, returning full data for every entity type Scout reads.</p>
+
+            <div class="callout callout-success">
+               <div class="callout-title"><i class="iconoir-flash"></i> Ghost tabs eliminated</div>
+               <p>The previous architecture spawned minimized popup windows ("ghost tabs") to force SFMC's per-module apps to issue CSRF-bearing requests, which Scout's <code>webRequest</code> listener then intercepted. v2.1 removes this entirely. All read APIs go through the cookie-only proxy. The two tokens still captured are used only for write operations and admin actions.</p>
+            </div>
+
+            <h3>Captured Tokens (write/admin only)</h3>
+            <table>
+               <thead>
+                  <tr>
+                     <th>Token</th>
+                     <th>Storage Key</th>
+                     <th>Used For</th>
+                     <th>Capture Source</th>
+                  </tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>pageToken</code></td>
+                     <td><code>scout_pageToken</code></td>
+                     <td>Content Builder writes (create asset, update template)</td>
+                     <td><code>x-csrf-token</code> from <code>content-builder.{stack}.marketingcloudapps.com</code> requests</td>
+                  </tr>
+                  <tr>
+                     <td><code>adminToken</code></td>
+                     <td><code>scout_adminToken</code></td>
+                     <td>CloudPages publishing, admin operations</td>
+                     <td><code>x-csrf-token</code> from admin / cloudpages requests</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <p>Both tokens are captured passively via <code>chrome.webRequest.onBeforeSendHeaders</code> — no fetches are issued by Scout to obtain them, and no ghost tabs are spawned.</p>
+
+            <h3>Cookie-only request flow</h3>
+            <div class="mermaid">
+sequenceDiagram
+   participant User
+   participant Panel as Scout Panel
+   participant BG as background.js
+   participant Proxy as mc.{stack}.exacttarget.com/cloud/fuelapi
+
+   User->>Panel: Search "M1_Test"
+   Panel->>BG: MAKE_REQUEST { url, method, headers }
+   BG->>Proxy: fetch(url, { credentials: 'include' })
+   Note over BG,Proxy: Browser attaches SFMC session cookies automatically
+   Proxy-->>BG: JSON (200 OK)
+   BG-->>Panel: sendResponse({ results })
+   Panel->>Panel: Render results
+            </div>
+
+            <div class="callout callout-danger">
+               <div class="callout-title"><i class="iconoir-lock"></i> Security boundaries</div>
+               <p>Scout reads only data your SFMC user already has access to — it cannot escalate privileges. Tokens (when captured) live in <code>chrome.storage.local</code>, are never transmitted to any external server, and are invalidated when your SFMC session ends. The extension's host permissions are scoped to <code>*.exacttarget.com</code> and <code>*.marketingcloudapps.com</code>.</p>
+            </div>
+         </section>
+
+         <!-- DATA FLOW -->
+         <section id="data-flow">
+            <h2>Data Flow</h2>
+            <p>All API calls are proxied through the background service worker to bypass CORS restrictions. The content script sends messages to the background; the background makes authenticated fetch requests using the user's session credentials.</p>
+
+            <div class="mermaid">
+graph LR
+   A[User Action] --> B[content.js]
+   B --> C{chrome.runtime\nsendMessage}
+   C --> D[background.js]
+   D --> E[Handler / Service]
+   E --> F[SFMC REST API]
+   F --> G[Response]
+   G --> E
+   E --> H[sendResponse]
+   H --> B
+   B --> I[Render UI]
+
+   style A fill:#2563eb,stroke:#2563eb,color:#fff
+   style I fill:#1f7a3a,stroke:#1f7a3a,color:#fff
+   style F fill:#c0322a,stroke:#c0322a,color:#fff
+            </div>
+
+            <h3>Search Streaming Pattern</h3>
+            <p>Universal Search uses Chrome's long-lived port messaging to stream results progressively — each entity type posts results as they arrive rather than waiting for all sources to complete:</p>
+
+            <div class="mermaid">
+sequenceDiagram
+   participant UI as content.js (UI)
+   participant Port as chrome.runtime.Port
+   participant SH as SearchService
+   participant APIs as SFMC APIs
+
+   UI->>Port: openPort('search')
+   Port->>SH: searchAll(query, filter)
+   SH->>APIs: Parallel fetch (Auto + Journey + DE + Asset + Activity)
+   APIs-->>SH: Results stream in
+   SH-->>Port: port.postMessage(results[])
+   Port-->>UI: onMessage → renderResults()
+   Note over UI: Panel updates incrementally
+            </div>
+         </section>
+
+         <!-- API ENDPOINTS -->
+         <section id="endpoints">
+            <h2>API Endpoints</h2>
+            <p>SFMC Scout integrates with multiple SFMC REST API endpoints. All URLs are relative to the detected stack instance (e.g. <code>mc.s51.exacttarget.com</code> or <code>{bu}.marketingcloudapps.com</code>).</p>
+
+            <h3>Automations</h3>
+            <table>
+               <thead>
+                  <tr><th>Endpoint</th><th>Method</th><th>Purpose</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>/cloud/fuelapi/legacy/v1/beta/automations/automation/definition/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>List all automations with status, last run time</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/cloud/fuelapi/legacy/v1/beta/automations/automation/definition/{id}</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Automation detail with full step breakdown</td>
+                     <td>autoToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Journeys</h3>
+            <table>
+               <thead>
+                  <tr><th>Endpoint</th><th>Method</th><th>Purpose</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>/cloud/fuelapi/interaction/v1/interactions/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>List journeys (active + draft, with stats, trigger, tag)</td>
+                     <td>journeyToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Data Extensions</h3>
+            <table>
+               <thead>
+                  <tr><th>Endpoint</th><th>Method</th><th>Purpose</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>/cloud/fuelapi/data-internal/v1/customobjects</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Search / list Data Extensions (paginated)</td>
+                     <td>deToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/cloud/fuelapi/data-internal/v1/customobjects/{id}/fields</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Field definitions for a specific DE</td>
+                     <td>deToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/cloud/fuelapi/data-internal/v1/customobjects</code></td>
+                     <td><span class="badge badge-post">POST</span></td>
+                     <td>Create a new Data Extension</td>
+                     <td>deToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Assets &amp; Emails (Content Builder)</h3>
+            <table>
+               <thead>
+                  <tr><th>Endpoint</th><th>Method</th><th>Purpose</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>/contactsmeta/fuelapi/asset/v1/content/assets</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Search Content Builder assets and emails</td>
+                     <td>cbToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Activities (7 Types)</h3>
+            <table>
+               <thead>
+                  <tr><th>Endpoint</th><th>Method</th><th>Activity Type</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/queries/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>SQL Query Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/scripts/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Script (SSJS) Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/filters/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Filter Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/messaging-internal/v1/emailsenddefinition/</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Send Email Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/imports</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Import Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/filetransfers</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>File Transfer Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td><code>/AutomationStudioFuel3/fuelapi/automation/v1/dataextracts</code></td>
+                     <td><span class="badge badge-get">GET</span></td>
+                     <td>Data Extract Activities</td>
+                     <td>autoToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-server"></i> Base URLs</div>
+               <p>Automation, Journey, and DE endpoints: <code>https://mc.{stack}.exacttarget.com</code><br>
+               Content Builder and Activity endpoints: <code>https://{bu}.marketingcloudapps.com</code><br>
+               Stack is auto-detected from the active tab URL via <code>InstanceService.js</code>.</p>
+            </div>
+         </section>
+
+         <!-- AUTHENTICATION -->
+         <section id="authentication">
+            <h2>Authentication</h2>
+            <p>All API requests use the user's own authenticated SFMC browser session. Scout never asks for credentials — it reads CSRF tokens that SFMC itself embeds in your outgoing requests.</p>
+
+            <h3>Request Pattern</h3>
+            <pre><code>// background.js — makeAPIRequest (CORS proxy)
+async function makeAPIRequest(url, method, headers, body) {
+    const response = await fetch(url, {
+        method,
+        headers,
+        body,
+        credentials: 'include'   // Uses active SFMC session cookie
+    });
+    return { ok: response.ok, status: response.status, data: await response.json() };
+}</code></pre>
+
+            <h3>Token Header Patterns</h3>
+            <table>
+               <thead>
+                  <tr><th>API Type</th><th>Header</th><th>Token</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td>Content Builder (assets)</td>
+                     <td><code>x-csrf-token: {cbToken}</code></td>
+                     <td>cbToken</td>
+                  </tr>
+                  <tr>
+                     <td>Data Extensions</td>
+                     <td><code>x-csrf-token: {deToken}</code></td>
+                     <td>deToken</td>
+                  </tr>
+                  <tr>
+                     <td>Automations / Activities</td>
+                     <td><code>x-csrf-token: {autoToken}</code></td>
+                     <td>autoToken</td>
+                  </tr>
+                  <tr>
+                     <td>Journeys</td>
+                     <td><code>x-csrf-token: {journeyToken}</code></td>
+                     <td>journeyToken</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <div class="callout callout-warning">
+               <div class="callout-title"><i class="iconoir-clock"></i> Token Expiration</div>
+               <p>Tokens expire with your SFMC session (typically 30–60 minutes). If you encounter 401 or 403 errors, refresh the SFMC page to re-capture tokens, then click <strong>Refresh Tokens</strong> in the Scout panel header.</p>
+            </div>
+         </section>
+
+         <!-- UNIVERSAL SEARCH -->
+         <section id="search">
+            <h2>Universal Search</h2>
+            <p>Universal Search is the default view when the panel opens. A single text input searches across all SFMC entity types simultaneously, with results streaming in as each source responds.</p>
+
+            <h3>Searchable Entity Types</h3>
+            <table>
+               <thead>
+                  <tr><th>Filter</th><th>Entity Type</th><th>Fields Searched</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><code>all</code></td>
+                     <td>All types simultaneously</td>
+                     <td>—</td>
+                  </tr>
+                  <tr>
+                     <td><code>de</code></td>
+                     <td>Data Extensions</td>
+                     <td>Name, Customer Key, folder path</td>
+                  </tr>
+                  <tr>
+                     <td><code>automation</code></td>
+                     <td>Automations</td>
+                     <td>Name, status, last run time</td>
+                  </tr>
+                  <tr>
+                     <td><code>journey</code></td>
+                     <td>Journeys</td>
+                     <td>Name, status, version, channel</td>
+                  </tr>
+                  <tr>
+                     <td><code>email</code></td>
+                     <td>Emails</td>
+                     <td>Name, type, folder, customer key</td>
+                  </tr>
+                  <tr>
+                     <td><code>asset</code></td>
+                     <td>Content Builder Assets</td>
+                     <td>Name, type, folder, ID, created by</td>
+                  </tr>
+                  <tr>
+                     <td><code>activity</code></td>
+                     <td>Activities (7 types)</td>
+                     <td>Name, type, target DE, key</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Result Actions</h3>
+            <ul>
+               <li><strong>Automations</strong> — click result to load full step breakdown inline</li>
+               <li><strong>Assets / Emails</strong> — click to copy name to clipboard; badge shows asset type</li>
+               <li><strong>Data Extensions</strong> — click to view field count, folder, sendable flag</li>
+               <li><strong>Journeys</strong> — click to view status, version, channel</li>
+               <li><strong>Activities</strong> — click to view target DE, key, description</li>
+            </ul>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-refresh-double"></i> Streaming Results</div>
+               <p>Search results appear progressively as each entity type responds. You don't need to wait for all sources — Automation results may appear while Journey results are still loading.</p>
+            </div>
+         </section>
+
+         <!-- AUTOMATIONS -->
+         <section id="automations">
+            <h2>Automations</h2>
+            <p>The Automations tab lists all automation definitions in your SFMC instance with color-coded status badges. Clicking any automation loads a full step breakdown without leaving the panel.</p>
+
+            <h3>Status Badge Colors</h3>
+            <table>
+               <thead>
+                  <tr><th>Status</th><th>Color</th><th>Description</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td>Active / Running</td><td style="color: var(--success);">Green</td><td>Automation is currently executing</td></tr>
+                  <tr><td>Scheduled</td><td style="color: #58a6ff;">Blue</td><td>Waiting for scheduled trigger</td></tr>
+                  <tr><td>Paused</td><td style="color: var(--warning);">Yellow</td><td>Manually paused</td></tr>
+                  <tr><td>Error</td><td style="color: var(--danger);">Red</td><td>Last run encountered an error</td></tr>
+                  <tr><td>Ready</td><td style="color: var(--text-3);">Grey</td><td>Idle, awaiting trigger</td></tr>
+               </tbody>
+            </table>
+
+            <h3>Step Breakdown</h3>
+            <p>Clicking an automation expands the full step tree, showing every activity in every step. For SQL Query and SSJS Script activities, the code is shown with syntax highlighting in an expandable block. The detail view also includes:</p>
+            <ul>
+               <li>Automation key and ID</li>
+               <li>Schedule configuration</li>
+               <li>Last run time and next scheduled run</li>
+               <li>Direct link to open in SFMC Automation Studio</li>
+            </ul>
+
+            <div class="callout callout-success">
+               <div class="callout-title"><i class="iconoir-code"></i> Syntax Highlighting</div>
+               <p>SQL and SSJS code blocks in automation steps are fully syntax-highlighted and independently expandable/collapsible. No need to navigate to Automation Studio to read the SQL.</p>
+            </div>
+         </section>
+
+         <!-- DATA EXTENSIONS -->
+         <section id="data-extensions">
+            <h2>Data Extensions</h2>
+            <p>The Data Extensions tab provides four sub-tabs: <strong>Search</strong>, <strong>Create</strong>, <strong>Export / Import</strong>, and <strong>Report</strong>.</p>
+
+            <h3>Search</h3>
+            <p>Real-time DE search with paginated results. Each result shows:</p>
+            <ul>
+               <li>DE name and Customer Key</li>
+               <li>Field count</li>
+               <li>Folder path</li>
+               <li>Sendable flag indicator</li>
+               <li>Testable flag indicator</li>
+            </ul>
+
+            <h3>Create</h3>
+            <p>3-step wizard for creating a new Data Extension:</p>
+            <ol>
+               <li><strong>Basic Info</strong> — Name, Customer Key, description, sendable/testable flags, folder selection</li>
+               <li><strong>Fields</strong> — Add typed fields with name, type (Text, Number, Date, Boolean, etc.), length, required, primary key flags</li>
+               <li><strong>Review &amp; Submit</strong> — Preview the full DE definition before creating</li>
+            </ol>
+
+            <div class="mermaid">
+graph TD
+   A[Step 1: Basic Info] --> B[Step 2: Add Fields]
+   B --> C[Step 3: Review]
+   C --> D{Confirm?}
+   D -->|Yes| E[POST /customobjects]
+   D -->|No| B
+   E --> F{Success?}
+   F -->|Yes| G[DE Created — Show Link]
+   F -->|No| H[Show Error]
+
+   style A fill:#1e40af
+   style G fill:#065f46
+   style H fill:#991b1b
+            </div>
+
+            <h3>Export</h3>
+            <p>Export all Data Extensions from your instance:</p>
+            <ul>
+               <li><strong>JSON Export</strong> — Structured export with field inventory, metadata, and folder path. Full paginated fetch handles thousands of DEs.</li>
+               <li><strong>ZIP Export</strong> — Individual JSON files per DE bundled into a downloadable ZIP archive</li>
+            </ul>
+
+            <h3>Import</h3>
+            <p>Restore DEs from a previously exported JSON file:</p>
+            <ul>
+               <li>Parses and validates the JSON structure</li>
+               <li>Optionally re-creates the original folder hierarchy</li>
+               <li>Posts each DE to the REST API individually with progress tracking</li>
+            </ul>
+
+            <h3>Report</h3>
+            <p>Generate a full Data Extension inventory report. See the <a href="#reports">Reports</a> section for details on the report format.</p>
+
+            <div class="callout callout-warning">
+               <div class="callout-title"><i class="iconoir-warning-triangle"></i> Rate Limits</div>
+               <p>SFMC's DE REST API limits requests per minute. Export and Report generation batch requests with delays between pages. Large instances (1,000+ DEs) may take 30–60 seconds to fully export.</p>
+            </div>
+         </section>
+
+         <!-- JOURNEYS -->
+         <section id="journeys">
+            <h2>Journeys</h2>
+            <p>The Journeys tab lists all Journey Builder entries with status, version, and channel information.</p>
+
+            <h3>Fetched Fields</h3>
+            <table>
+               <thead>
+                  <tr><th>Field</th><th>Description</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td>Name</td><td>Journey display name</td></tr>
+                  <tr><td>Status</td><td>Running / Draft / Stopped / Unpublished</td></tr>
+                  <tr><td>Version</td><td>Current version number</td></tr>
+                  <tr><td>Channel</td><td>Email, Mobile Push, etc.</td></tr>
+                  <tr><td>Key</td><td>Unique journey key (click to copy)</td></tr>
+                  <tr><td>Modified</td><td>Last modification date</td></tr>
+               </tbody>
+            </table>
+
+            <h3>Status Colors</h3>
+            <ul>
+               <li><strong style="color: var(--success);">Green</strong> — Running (active journey)</li>
+               <li><strong style="color: var(--warning);">Yellow</strong> — Draft or Unpublished</li>
+               <li><strong style="color: var(--danger);">Red</strong> — Stopped</li>
+            </ul>
+         </section>
+
+         <!-- REPORTS -->
+         <section id="reports">
+            <h2>Reports</h2>
+            <p>Reports open in a new browser tab as standalone self-contained HTML pages. They are fully client-side — no server required — and include live filtering, sortable columns, and dark/light theme switching.</p>
+
+            <h3>Available Reports</h3>
+            <table>
+               <thead>
+                  <tr><th>Report</th><th>Columns</th><th>Formats</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td><strong>Automations</strong></td>
+                     <td>Name, Status, Key, Last Run, Schedule, Steps, Folder, Created By</td>
+                     <td>HTML, CSV</td>
+                  </tr>
+                  <tr>
+                     <td><strong>Journeys</strong></td>
+                     <td>Name, Status, Key, Version, Channel</td>
+                     <td>HTML, CSV</td>
+                  </tr>
+                  <tr>
+                     <td><strong>Assets</strong></td>
+                     <td>Name, Type, Status, ID, Customer Key, Folder, Created By</td>
+                     <td>HTML, CSV</td>
+                  </tr>
+                  <tr>
+                     <td><strong>Activities</strong></td>
+                     <td>Name, Type Badge, Key, Target DE, Description</td>
+                     <td>HTML, CSV</td>
+                  </tr>
+                  <tr>
+                     <td><strong>Data Extensions</strong></td>
+                     <td>Name, Key, Fields (full inventory), Row Count, Sendable, Folder</td>
+                     <td>HTML, CSV, ZIP</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Report Features</h3>
+            <ul>
+               <li><strong>Live Filter</strong> — client-side text filter input that narrows rows in real-time</li>
+               <li><strong>Sortable Columns</strong> — click any column header to toggle ascending/descending sort</li>
+               <li><strong>Color-coded Badges</strong> — status badges use the same colors as the panel</li>
+               <li><strong>Dark / Light Theme</strong> — theme toggle inside the report, synced with panel preference</li>
+               <li><strong>Instance Metadata</strong> — report header shows SFMC instance, generation date, and total count</li>
+               <li><strong>Scout Logo</strong> — branded report header for professional presentation</li>
+            </ul>
+
+            <div class="callout callout-success">
+               <div class="callout-title"><i class="iconoir-reports"></i> Standalone HTML</div>
+               <p>Generated reports are fully self-contained — all styles and data are inline. Save the HTML file to share with colleagues or keep as an audit snapshot. No active SFMC session required to view a saved report.</p>
+            </div>
+         </section>
+
+         <!-- SNIPPETS -->
+         <section id="snippets">
+            <h2>Snippets</h2>
+            <p>The Snippets feature lets you save, organize, and re-deploy reusable code blocks (AMPscript, SSJS, SQL) across your SFMC work.</p>
+
+            <h3>Snippet Storage</h3>
+            <ul>
+               <li>Stored in <code>chrome.storage.local</code> — persists across sessions</li>
+               <li>Each snippet has: label, language tag (ampscript / ssjs / sql), code body</li>
+               <li>Syntax-highlighted preview in the panel</li>
+            </ul>
+
+            <h3>Ace Editor Deployment</h3>
+            <p>Scout can detect open Ace editor instances on the current SFMC page (Cloud Pages, Script Activities) and inject snippet code directly into them:</p>
+            <ol>
+               <li>Navigate to a Cloud Page or Script Activity in SFMC</li>
+               <li>Open Scout → Snippets</li>
+               <li>Click <strong>Deploy</strong> on a snippet</li>
+               <li><code>injected_script.js</code> locates the active Ace editor instance</li>
+               <li>Code is inserted at the current cursor position</li>
+            </ol>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-code"></i> How Ace Injection Works</div>
+               <p><code>AceEditorHelper.js</code> is injected directly into the page context (not the extension context) via <code>injected_script.js</code>. This is necessary because Ace editor instances live in the page's JavaScript memory, which the extension content script cannot directly access.</p>
+            </div>
+         </section>
+
+         <!-- SECURITY -->
+         <section id="security">
+            <h2>Security &amp; Privacy</h2>
+
+            <h3>Data Handling</h3>
+            <ul>
+               <li><strong>No external transmission</strong> — all API calls go directly to SFMC's own servers using your browser session</li>
+               <li><strong>No credentials captured</strong> — Scout only reads CSRF tokens, never usernames or passwords</li>
+               <li><strong>Local storage only</strong> — tokens stored in <code>chrome.storage.local</code>, scoped to your browser profile</li>
+               <li><strong>Session-bound tokens</strong> — all tokens expire when your SFMC session ends</li>
+            </ul>
+
+            <h3>Permissions Justification</h3>
+            <table>
+               <thead>
+                  <tr><th>Permission</th><th>Required For</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td><code>webRequest</code></td><td>Intercepting outgoing SFMC requests to capture CSRF tokens from response headers</td></tr>
+                  <tr><td><code>storage</code></td><td>Persisting tokens, theme preference, panel width, and snippets in chrome.storage.local</td></tr>
+                  <tr><td><code>tabs</code></td><td>Opening minimized ghost windows for token refresh on first panel open</td></tr>
+                  <tr><td><code>scripting</code></td><td>Injecting <code>injected_script.js</code> into the page context for Ace editor access</td></tr>
+               </tbody>
+            </table>
+
+            <div class="callout callout-danger">
+               <div class="callout-title"><i class="iconoir-shield-alert"></i> Internal Use Only</div>
+               <p>SFMC Scout is designed for developer and marketer use on accounts you are authorized to access. Never install on shared browser profiles or use to access SFMC accounts without authorization.</p>
+            </div>
+         </section>
+
+         <!-- LIMITATIONS -->
+         <section id="limitations">
+            <h2>Limitations</h2>
+
+            <h3>Technical Constraints</h3>
+            <ul>
+               <li><strong>Active Session Required</strong> — All API calls require an active authenticated SFMC browser session</li>
+               <li><strong>Single Business Unit</strong> — Scout operates within the Business Unit of the currently active tab</li>
+               <li><strong>Chrome Only</strong> — MV3 extension architecture; not compatible with Firefox or Safari</li>
+               <li><strong>Rate Limits</strong> — SFMC API throttling applies; large-scale exports may take time</li>
+               <li><strong>No Write Operations (except DE Create)</strong> — Scout is primarily read-only; only DE creation modifies SFMC data</li>
+            </ul>
+
+            <h3>Known Limitations</h3>
+            <ul>
+               <li>Ghost tab token refresh requires pop-up permission; blocked pop-ups may prevent token capture</li>
+               <li>Ace editor deployment requires the editor to be visible and focused on the page</li>
+               <li>Very large instances (10,000+ DEs) may hit browser memory limits during full export</li>
+               <li>Journey detail view (step breakdown) is not available — only list view with status</li>
+            </ul>
+
+            <div class="callout callout-warning">
+               <div class="callout-title"><i class="iconoir-shield-alert"></i> Not Official</div>
+               <p>SFMC Scout is an unofficial community tool, not supported by Salesforce. Use at your own risk in accordance with your organization's policies. Always maintain proper backups of SFMC configurations.</p>
+            </div>
+         </section>
+
+         <!-- TROUBLESHOOTING -->
+         <section id="troubleshooting">
+            <h2>Troubleshooting</h2>
+
+            <h3>Token Issues</h3>
+            <table>
+               <thead>
+                  <tr><th>Error</th><th>Cause</th><th>Solution</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td>Token badges show red / missing</td>
+                     <td>Tokens not yet captured (first load)</td>
+                     <td>Click <strong>Refresh Tokens</strong> in panel header; Scout will open ghost tabs</td>
+                  </tr>
+                  <tr>
+                     <td>401 Unauthorized on API calls</td>
+                     <td>Session token expired</td>
+                     <td>Refresh the SFMC page to re-authenticate, then open Scout again</td>
+                  </tr>
+                  <tr>
+                     <td>403 EBADCSRFTOKEN</td>
+                     <td>Wrong token used for endpoint</td>
+                     <td>Token classification may be off; check Chrome DevTools console for token debug</td>
+                  </tr>
+                  <tr>
+                     <td>Ghost tabs open but tokens never arrive</td>
+                     <td>Pop-ups blocked by Chrome settings</td>
+                     <td>Allow pop-ups for SFMC domains in Chrome settings, then retry</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Search Issues</h3>
+            <table>
+               <thead>
+                  <tr><th>Issue</th><th>Cause</th><th>Fix</th></tr>
+               </thead>
+               <tbody>
+                  <tr>
+                     <td>No search results returned</td>
+                     <td>Token for entity type missing</td>
+                     <td>Check token badges; refresh tokens if any show as missing</td>
+                  </tr>
+                  <tr>
+                     <td>Results incomplete (e.g. only automations)</td>
+                     <td>Some tokens not yet captured</td>
+                     <td>Wait a moment; results stream in — scroll down to see all entity types</td>
+                  </tr>
+               </tbody>
+            </table>
+
+            <h3>Debug Steps</h3>
+            <ol>
+               <li>Open Chrome DevTools (<code>F12</code>) on the SFMC page</li>
+               <li>Check the <strong>Console</strong> tab for Scout log messages (prefixed with <code>[Scout]</code>)</li>
+               <li>Inspect the extension service worker at <code>chrome://extensions/</code> → SFMC Scout → Service Worker</li>
+               <li>Check <code>chrome.storage.local</code> for stored token values</li>
+               <li>Verify your SFMC session is active and not timed out</li>
+            </ol>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-code"></i> Debug HTML</div>
+               <p>The extension includes a <code>debug.html</code> utility page for inspecting token state. Open it via <code>chrome-extension://[extension-id]/debug.html</code>.</p>
+            </div>
+         </section>
+
+         <!-- SPECS -->
+         <section id="specs">
+            <h2>Technical Specifications</h2>
+
+            <h3>Extension Details</h3>
+            <table>
+               <thead>
+                  <tr><th>Property</th><th>Value</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td>Version</td><td>2.1.0</td></tr>
+                  <tr><td>Manifest Version</td><td>3 (MV3)</td></tr>
+                  <tr><td>Architecture</td><td>Cookie-only proxy — no per-section CSRF tokens, no ghost tabs</td></tr>
+                  <tr><td>Content Script</td><td><code>content.js</code> (single file, no build step)</td></tr>
+                  <tr><td>Background Worker</td><td>ES Module service worker (<code>background.js</code>)</td></tr>
+                  <tr><td>Handler Modules</td><td>~30 files across <code>handlers/</code>, <code>services/</code>, <code>utils/</code>, <code>core/</code></td></tr>
+                  <tr><td>Host Permissions</td><td><code>*.exacttarget.com</code>, <code>*.marketingcloudapps.com</code></td></tr>
+                  <tr><td>Permissions</td><td><code>storage</code>, <code>webRequest</code>, <code>tabs</code>, <code>scripting</code></td></tr>
+                  <tr><td>Default Theme</td><td>Light (toggle persisted in <code>chrome.storage.local</code>)</td></tr>
+                  <tr><td>Panel Width</td><td>440–1100px (default 660px, drag-resizable, persisted)</td></tr>
+                  <tr><td>Dependencies</td><td>None (vanilla JavaScript, inline SVG icons)</td></tr>
+               </tbody>
+            </table>
+
+            <h3>Supported SFMC Stacks</h3>
+            <table>
+               <thead>
+                  <tr><th>Stack Format</th><th>Example URL</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td>mc.s1 – mc.s51</td><td><code>mc.s51.exacttarget.com</code></td></tr>
+                  <tr><td>Custom stacks</td><td>Detected automatically from <code>window.location.hostname</code></td></tr>
+               </tbody>
+            </table>
+
+            <h3>Browser Compatibility</h3>
+            <ul>
+               <li><i class="iconoir-check-circle" style="color: var(--success);"></i> Chrome 100+ (primary supported browser)</li>
+               <li><i class="iconoir-check-circle" style="color: var(--success);"></i> Edge 100+ (Chromium-based)</li>
+               <li><i class="iconoir-warning-triangle" style="color: var(--warning);"></i> Firefox (MV3 support incomplete — not recommended)</li>
+               <li><i class="iconoir-cancel" style="color: var(--danger);"></i> Safari (MV3 extension API not supported)</li>
+            </ul>
+
+            <div class="callout callout-success">
+               <div class="callout-title"><i class="iconoir-flash"></i> No Build Step</div>
+               <p>SFMC Scout requires no build tooling. All modules are loaded natively via Chrome's ES Module support in MV3 service workers. Load unpacked and use immediately.</p>
+            </div>
+         </section>
+      </main>
+
+      <!-- Right rail: On this page -->
+      <aside class="toc-rail" aria-label="On this page">
+         <div class="toc-label">On this page</div>
+         <ul class="toc-list" id="toc-list"></ul>
+      </aside>
+   </div>
+
+   <script>
+      // ─── THEME ──────────────────────────────────────────────────────
+      const THEME_KEY = 'scout_docs_theme';
+      const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
+      document.documentElement.setAttribute('data-theme', savedTheme);
+
+      const mermaidThemeFor = (isDark) => ({
+         darkMode: isDark,
+         background: isDark ? '#0a0b0d' : '#fafaf7',
+         primaryColor: isDark ? '#181b20' : '#ffffff',
+         primaryBorderColor: isDark ? '#2c333d' : '#d4d1c6',
+         primaryTextColor: isDark ? '#e8eaed' : '#0f1115',
+         lineColor: isDark ? '#4d8eff' : '#2563eb',
+         secondaryColor: isDark ? '#111316' : '#f3f2ed',
+         tertiaryColor: isDark ? '#0a0b0d' : '#fafaf7',
+         textColor: isDark ? '#e8eaed' : '#0f1115',
+         mainBkg: isDark ? '#181b20' : '#ffffff',
+         secondBkg: isDark ? '#111316' : '#f3f2ed',
+         nodeBorder: isDark ? '#2c333d' : '#d4d1c6',
+         clusterBkg: isDark ? '#111316' : '#f3f2ed',
+         clusterBorder: isDark ? '#2c333d' : '#d4d1c6',
+         edgeLabelBackground: isDark ? '#111316' : '#fafaf7',
+         actorBorder: isDark ? '#2c333d' : '#d4d1c6',
+         actorBkg: isDark ? '#181b20' : '#ffffff',
+         actorTextColor: isDark ? '#e8eaed' : '#0f1115',
+         actorLineColor: isDark ? '#4d8eff' : '#2563eb',
+         signalColor: isDark ? '#e8eaed' : '#0f1115',
+         signalTextColor: isDark ? '#e8eaed' : '#0f1115',
+         labelBoxBkgColor: isDark ? '#181b20' : '#ffffff',
+         labelBoxBorderColor: isDark ? '#2c333d' : '#d4d1c6',
+         labelTextColor: isDark ? '#e8eaed' : '#0f1115'
+      });
+
+      function applyMermaid(initial) {
+         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+         mermaid.initialize({
+            startOnLoad: initial,
+            theme: 'base',
+            securityLevel: 'loose',
+            themeVariables: mermaidThemeFor(isDark),
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
+         });
+         if (!initial) {
+            document.querySelectorAll('.mermaid').forEach(n => {
+               if (n.dataset.originalCode) n.innerHTML = n.dataset.originalCode;
+               else n.dataset.originalCode = n.innerHTML;
+               n.removeAttribute('data-processed');
+            });
+            mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
+         }
+      }
+
+      function toggleTheme() {
+         const html = document.documentElement;
+         const isDark = html.getAttribute('data-theme') === 'dark';
+         const next = isDark ? 'light' : 'dark';
+         html.setAttribute('data-theme', next);
+         localStorage.setItem(THEME_KEY, next);
+         // Sync toggle icon
+         const icon = document.querySelector('.theme-toggle i');
+         if (icon) icon.className = next === 'dark' ? 'iconoir-half-moon' : 'iconoir-sun-light';
+         applyMermaid(false);
+      }
+
+      // ─── NAV — LEFT SIDEBAR ─────────────────────────────────────────
+      const sections = Array.from(document.querySelectorAll('main section[id]'));
+      const navLinks = Array.from(document.querySelectorAll('.nav-link'));
+
+      function updateActiveLink() {
+         let current = sections[0]?.id || '';
+         for (const s of sections) {
+            if (scrollY + 120 >= s.offsetTop) current = s.id;
+         }
+         navLinks.forEach(link => {
+            link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+         });
+         updateTocActive();
+      }
+
+      navLinks.forEach(link => {
+         link.addEventListener('click', e => {
+            e.preventDefault();
+            const t = document.getElementById(link.getAttribute('href').slice(1));
+            if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+         });
+      });
+
+      // ─── RIGHT RAIL — ON THIS PAGE ──────────────────────────────────
+      const tocList = document.getElementById('toc-list');
+      const slugify = (s) => (s || '').trim().toLowerCase()
+         .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const tocEntries = [];
+
+      function buildToc() {
+         if (!tocList) return;
+         tocList.innerHTML = '';
+         document.querySelectorAll('main section[id] h2, main section[id] h3').forEach(h => {
+            if (!h.id) {
+               const slug = slugify(h.textContent);
+               if (slug) h.id = 'h-' + slug;
+            }
+            if (!h.id) return;
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '#' + h.id;
+            a.textContent = h.textContent.trim();
+            a.className = h.tagName.toLowerCase();
+            a.addEventListener('click', e => {
+               e.preventDefault();
+               h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+            li.appendChild(a);
+            tocList.appendChild(li);
+            tocEntries.push({ id: h.id, link: a, el: h });
+         });
+      }
+
+      function updateTocActive() {
+         if (!tocEntries.length) return;
+         let activeId = tocEntries[0].id;
+         for (const e of tocEntries) {
+            if (scrollY + 140 >= e.el.offsetTop) activeId = e.id;
+         }
+         tocEntries.forEach(e => e.link.classList.toggle('active', e.id === activeId));
+      }
+
+      // ─── BOOT ───────────────────────────────────────────────────────
+      buildToc();
+      updateActiveLink();
+      window.addEventListener('scroll', updateActiveLink, { passive: true });
+      window.addEventListener('resize', updateActiveLink, { passive: true });
+
+      // Sync theme toggle icon on first paint
+      (() => {
+         const icon = document.querySelector('.theme-toggle i');
+         if (icon) icon.className = savedTheme === 'dark' ? 'iconoir-half-moon' : 'iconoir-sun-light';
+      })();
+
+      applyMermaid(true);
+   </script>
+</body>
+</html>

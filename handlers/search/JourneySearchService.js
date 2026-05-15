@@ -1,15 +1,25 @@
 // handlers/search/JourneySearchService.js
 // Search service for Journeys (Journey Builder)
+//
+// Uses SFMC's server-side `nameOrDescription=X` query-string filter — the same
+// param Journey Builder's own UI sends (verified via HAR):
+//
+//   GET .../interaction/v1/interactions/
+//       ?mostRecentVersionOnly=false&mostRecentVersionOrRunningOnly=true
+//       &$page=1&$pageSize=50
+//       &extras=trigger,stats,tag
+//       &$orderBy=modifiedDate desc
+//       &nameOrDescription=WW_2026_
+//
+// One fast call, server-side substring match across name + description. The
+// previous client-side filter approach failed for production orgs with hundreds
+// of journeys because matches often fall past the first page.
 
 import { InstanceService } from '../../utils/InstanceService.js';
 
 export class JourneySearchService {
-    /**
-     * Search Journeys by name
-     * @param {string} searchTerm - Search term
-     * @param {string} instance - SFMC instance (optional)
-     * @returns {Promise<Array>} Array of matching Journeys
-     */
+    static MAX_RESULTS = 40;
+
     static async search(searchTerm, instance = null) {
         if (!searchTerm || searchTerm.trim().length === 0) {
             return [];
@@ -17,48 +27,37 @@ export class JourneySearchService {
 
         try {
             const sfmcInstance = instance || await InstanceService.getInstance();
-            const url = `https://${sfmcInstance}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/?mostRecentVersionOnly=false&mostRecentVersionOrRunningOnly=true&$page=1&$pageSize=100&extras=trigger%2Cstats%2Ctag&$orderBy=modifiedDate%20desc`;
+            const term = searchTerm.trim();
+            const encodedTerm = encodeURIComponent(term);
+
+            const url = `https://${sfmcInstance}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/` +
+                `?mostRecentVersionOnly=false&mostRecentVersionOrRunningOnly=true` +
+                `&$page=1&$pageSize=${this.MAX_RESULTS}` +
+                `&extras=trigger%2Cstats%2Ctag` +
+                `&$orderBy=modifiedDate%20desc` +
+                `&nameOrDescription=${encodedTerm}`;
 
             const response = await fetch(url, {
                 method: 'GET',
                 credentials: 'include',
-                headers: {
-                    'accept': 'application/json'
-                }
+                headers: { 'accept': 'application/json' }
             });
-
-            if (!response.ok) {
-                throw new Error(`Failed to search journeys: ${response.status}`);
-            }
+            if (!response.ok) return [];
 
             const data = await response.json();
-            const journeys = data.items || [];
+            const items = data.items || [];
 
-            // Filter by search term (case-insensitive)
-            const searchLower = searchTerm.toLowerCase().trim();
-            const filtered = journeys.filter(journey => 
-                journey.name && journey.name.toLowerCase().includes(searchLower)
-            );
-
-            // Format results
-            return filtered.map(journey => {
-                // Journey ID needs %23 prefix (URL encoded #)
-                // The ID should be used as-is, with %23 prefix in the URL
-                const journeyId = journey.id;
-                return {
-                    type: 'journey',
-                    id: journey.id,
-                    name: journey.name,
-                    version: journey.version || 1,
-                    status: journey.status || 'Unknown',
-                    modifiedDate: journey.modifiedDate || null,
-                    url: `https://${sfmcInstance}.exacttarget.com/cloud/#app/Journey%20Builder/%23${journeyId}`
-                };
-            });
+            return items.slice(0, this.MAX_RESULTS).map(journey => ({
+                type: 'journey',
+                id: journey.id,
+                name: journey.name,
+                version: journey.version || 1,
+                status: journey.status || 'Unknown',
+                modifiedDate: journey.modifiedDate || null,
+                url: `https://${sfmcInstance}.exacttarget.com/cloud/#app/Journey%20Builder/%23${journey.id}`
+            }));
         } catch (error) {
-            
             return [];
         }
     }
 }
-

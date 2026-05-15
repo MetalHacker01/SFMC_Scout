@@ -113,6 +113,85 @@ export async function fetchAllDeData(instance, progressCallback = null) {
         }
     } catch (_) { /* shared DEs unavailable — skip silently */ }
 
+    // Pass 3: "Shared Items" folder tree (child BU shared DEs not reachable via category/0).
+    // Fetches DEs and children in parallel; processes siblings in parallel batches of 10.
+    const fetchSharedTree = async (folderId, existingIds, depth = 3) => {
+        if (depth <= 0) return;
+
+        // Fire DE fetch and children fetch in parallel
+        const [deData, childrenData] = await Promise.all([
+            sfmcApiFetch(`/data-internal/v1/customobjects/category/${folderId}?retrievalType=1&includeFullPath=true&$page=1&$pagesize=${pageSize}`)
+                .catch(() => null),
+            depth > 1
+                ? sfmcApiFetch(`/legacy/v1/beta/folder/${folderId}/children?Localization=true&$top=1000&$skip=0`)
+                    .catch(() => null)
+                : Promise.resolve(null)
+        ]);
+
+        // Collect DEs — paginate if needed
+        if (deData && deData.items && deData.items.length > 0) {
+            const newItems = deData.items.filter(d => !existingIds.has(d.id));
+            newItems.forEach(d => { existingIds.add(d.id); allDes.push(d); });
+            if (progressCallback) progressCallback(`Fetched ${allDes.length} total DEs...`);
+
+            // Fetch remaining pages sequentially
+            let pg = 2;
+            while (deData.items.length === pageSize) {
+                const more = await sfmcApiFetch(
+                    `/data-internal/v1/customobjects/category/${folderId}?retrievalType=1&includeFullPath=true&$page=${pg}&$pagesize=${pageSize}`
+                ).catch(() => null);
+                if (!more || !more.items || more.items.length === 0) break;
+                more.items.filter(d => !existingIds.has(d.id)).forEach(d => { existingIds.add(d.id); allDes.push(d); });
+                if (more.items.length < pageSize) break;
+                pg++;
+            }
+        }
+
+        // Recurse into all subfolders in parallel (HTTP/2 multiplexes these)
+        if (childrenData) {
+            const children = (childrenData.entry || childrenData.items || []).filter(c =>
+                (c.type || '').toLowerCase().includes('dataextension') ||
+                (c.type || '').toLowerCase().includes('shared_data')
+            );
+            if (children.length > 0) {
+                await Promise.all(children.map(child => fetchSharedTree(child.id, existingIds, depth - 1)));
+            }
+        }
+    };
+
+    try {
+        if (progressCallback) progressCallback('Discovering shared DE folder tree...');
+        const rootsData = await sfmcApiFetch(
+            '/legacy/v1/beta/folder?$where=allowedtypes%20in%20(%27dataextension%27,%27shared_data%27,%27synchronizeddataextension%27,%27salesforcedataextension%27)&Localization=true'
+        );
+        if (rootsData) {
+            const roots = rootsData.entry || rootsData.items || [];
+            const sharedRoots = roots.filter(r => (r.type || r.iconType || '').toLowerCase() === 'shared_data');
+            const existingIds = new Set(allDes.map(d => d.id));
+
+            // Fetch children of all shared roots in parallel
+            const rootChildrenData = await Promise.all(
+                sharedRoots.map(root =>
+                    sfmcApiFetch(`/legacy/v1/beta/folder/${root.id}/children?Localization=true&$top=1000&$skip=0`)
+                        .catch(() => null)
+                )
+            );
+            const topFolders = [];
+            for (const childrenData of rootChildrenData) {
+                if (!childrenData) continue;
+                (childrenData.entry || childrenData.items || [])
+                    .filter(c =>
+                        (c.type || '').toLowerCase().includes('dataextension') ||
+                        (c.type || '').toLowerCase().includes('shared_data')
+                    )
+                    .forEach(c => topFolders.push(c));
+            }
+            // Traverse all top-level shared DE folders fully in parallel
+            await Promise.all(topFolders.map(folder => fetchSharedTree(folder.id, existingIds)));
+        }
+        if (progressCallback) progressCallback(`Total after shared folder DEs: ${allDes.length} DEs`);
+    } catch (_) { /* shared folder tree unavailable — skip silently */ }
+
     return allDes;
 }
 
@@ -122,8 +201,9 @@ export async function fetchAllDeData(instance, progressCallback = null) {
  * @param {string} instance - SFMC instance (e.g., 'mc.s50')
  * @returns {string} HTML string
  */
-export function generateReportHtml(allDeData, instance) {
+export function generateReportHtml(allDeData, instance, theme = 'dark') {
     const reportDate = new Date().toLocaleString();
+    const isLight = theme === 'light';
     const escapeHtml = (unsafe) => {
         if (!unsafe) return '';
         return String(unsafe)
@@ -221,6 +301,20 @@ export function generateReportHtml(allDeData, instance) {
             <title>SFMC Scout — DE Report (${instance})</title>
             <style>
                 :root {
+                    ${isLight ? `
+                    --bg:       #F3F2F2;
+                    --bg2:      #FFFFFF;
+                    --surface:  #FFFFFF;
+                    --surf2:    #F9F8F7;
+                    --border:   rgba(0,0,0,0.08);
+                    --border2:  rgba(0,0,0,0.12);
+                    --text:     #032D60;
+                    --text2:    #3E3E3C;
+                    --text3:    #706E6B;
+                    --accent:   #0176D3;
+                    --success:  #04844B;
+                    --error:    #C23934;
+                    ` : `
                     --bg:       #0F172A;
                     --bg2:      #0D1F35;
                     --surface:  #1E2D42;
@@ -233,6 +327,7 @@ export function generateReportHtml(allDeData, instance) {
                     --accent:   #4F8EF7;
                     --success:  #34D399;
                     --error:    #F87171;
+                    `}
                     --mono:     'JetBrains Mono','Fira Code','Cascadia Code',monospace;
                 }
                 * { box-sizing: border-box; }

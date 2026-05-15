@@ -3,8 +3,19 @@ debug.html
 debug.js
 CLAUDE.md
 
+# HAR captures and debug logs (may contain session data)
+*.har
+message.txt
+platform_internal.json
+
+# Local archive folder (zips of old versions, captured network logs)
+archive/
+
 # Internal planning docs
 docs/superpowers/
+
+# Claude project memory
+.claude/
 
 # OS
 .DS_Store

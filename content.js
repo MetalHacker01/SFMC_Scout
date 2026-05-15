@@ -90,6 +90,7 @@ const S = {
     deToken: null,
     autoToken: null,
     journeyToken: null,
+    _tokenSection: { cb: false, de: false, auto: false, journey: false },
     // Search
     searchQuery: '',
     searchFilter: 'all',   // all | de | automation | journey | email | asset
@@ -97,6 +98,9 @@ const S = {
     searchLoading: false,
     activeSearchPort: null,
     allSearchResults: [],
+    // Group keys (e.g. 'de', 'automation') whose result lists are user-expanded
+    // beyond the default top-N. Reset every new search.
+    searchExpandedGroups: new Set(),
     splitHoverIdx: null,   // hovered result index for split preview
     deSearchQuery: '',
     deSearchResults: [],
@@ -116,7 +120,7 @@ const S = {
     deWizardData: {},      // persists values across wizard steps
     reportsTab: 'de',       // de | automations | journeys | assets | activities
     panelOpenedOnce: false,
-    theme: 'dark',          // dark | light
+    theme: 'light',         // dark | light
     // Activities browser
     actDetail: null,
     actList: [],
@@ -137,12 +141,78 @@ function injectStyles() {
 // ============================================================
 //  TOAST NOTIFICATIONS
 // ============================================================
-function toast(msg, type = 'info', duration = 3500) {
+// Status icons used inline in the toast — small enough to chip-mount cleanly.
+// Drawn as currentColor SVGs so the CSS variable theming flows through.
+const TOAST_ICONS = {
+    success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>',
+    error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17.5v.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>',
+    info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></svg>'
+};
+
+function toast(msg, type = 'info', duration = 2000) {
+    // The container is appended to <body> (so it never clips against the panel's
+    // overflow) but mirrors the panel's theme class so light/dark mode flows
+    // through via CSS variables. Without this mirror, toasts were stuck in
+    // dark mode regardless of the panel's actual theme.
+    let container = document.getElementById('scout-toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'scout-toast-container';
+        document.body.appendChild(container);
+    }
+    container.classList.toggle('scout-light', S.theme === 'light');
+
+    const safeType = TOAST_ICONS[type] ? type : 'info';
     const t = document.createElement('div');
-    t.className = 'scout-toast ' + type;
-    t.textContent = msg;
-    document.body.appendChild(t);
+    t.className = 'scout-toast ' + safeType;
+    t.innerHTML =
+        '<span class="scout-toast-icon" aria-hidden="true">' + TOAST_ICONS[safeType] + '</span>' +
+        '<span class="scout-toast-msg"></span>';
+    // Set the message via textContent on the inner span to avoid HTML injection
+    // from any caller that builds the string from API output.
+    t.querySelector('.scout-toast-msg').textContent = msg;
+    container.appendChild(t);
+
+    // Fade out before removal so the toast has a smooth exit instead of vanishing.
+    const exitMs = 240;
+    if (duration > exitMs) {
+        setTimeout(() => t.classList.add('scout-toast-leaving'), duration - exitMs);
+    }
     setTimeout(() => t.remove(), duration);
+}
+
+// ============================================================
+//  RUNTIME GUARDS
+// ============================================================
+// When the extension reloads (during development, or auto-update), any old
+// content scripts still injected into open SFMC tabs become orphaned — their
+// chrome.runtime object exists but its `id` is null and any sendMessage throws
+// "Extension context invalidated". The page-side panel keeps running because
+// the DOM is intact, but background-bound calls silently fail. Wrap every
+// sendMessage in a guard so the orphan path is a no-op instead of an uncaught
+// exception in the console.
+function safeSendMessage(payload, cb) {
+    try {
+        if (!chrome.runtime || !chrome.runtime.id) {
+            if (cb) cb(null);
+            return;
+        }
+        chrome.runtime.sendMessage(payload, (res) => {
+            // Swallow chrome.runtime.lastError too — accessing it suppresses Chrome's
+            // "Unchecked runtime.lastError" console nag.
+            void chrome.runtime.lastError;
+            if (cb) cb(res);
+        });
+    } catch (_) {
+        if (cb) cb(null);
+    }
+}
+function safeConnect(name) {
+    try {
+        if (!chrome.runtime || !chrome.runtime.id) return null;
+        return chrome.runtime.connect({ name });
+    } catch (_) { return null; }
 }
 
 // ============================================================
@@ -185,66 +255,59 @@ function injectTokenCaptureIframes(onComplete) {
 }
 
 /**
- * Ghost-window token refresh:
- * 1. Fetch DE/admin CSRF token via service worker (direct, no CORS issue)
- * 2. Open invisible ghost tabs to CB, Auto, Journey SFMC sections so the
- *    webRequest listener intercepts the x-csrf-token headers from those pages
- * 3. Poll GET_TOKENS for up to 30 s; update badge as each token lands
+ * Refresh tokens — no longer opens ghost tabs. Read APIs use the cookie-only
+ * /cloud/fuelapi/ proxy on mc.{stack}.exacttarget.com and don't need section
+ * tokens. FETCH_CSRF still runs to populate the DE/admin slot for the remaining
+ * write paths (DE create, field update). Section tokens (CB/Auto/Journey) are
+ * captured passively by the webRequest listener as the user navigates SFMC.
  */
-function refreshAllTokensWithGhostTabs() {
-    if (!instance) { toast('No SFMC instance detected', 'warning'); return; }
+function refreshAllTokensWithGhostTabs(silent = false) {
+    if (!instance) { if (!silent) toast('No SFMC instance detected', 'warning'); return; }
 
     const badge = document.getElementById('scout-badge-token');
     if (badge) {
         badge.className = 'scout-token-badge loading';
-        badge.innerHTML = '<span class="scout-token-dot"></span> Refreshing…';
+        badge.innerHTML = '<span class="scout-token-dot"></span> Checking…';
     }
-    toast('Opening ghost tabs to capture tokens…', 'info');
 
-    // Ghost tabs — each page loads and fires credentialed requests
-    // that the webRequest listener in background.js intercepts and stores
-    const ghostUrls = [
-        { url: `https://mc.${stack}.exacttarget.com/cloud/#app/Content%20Builder`, label: 'Content Builder', timeout: 28000 },
-        { url: `https://mc.${stack}.marketingcloudapps.com/contactsmeta/`, label: 'Contact Builder (DE)', timeout: 22000 },
-        { url: `https://mc.${stack}.exacttarget.com/cloud/#app/Automation%20Studio/AutomationStudioFuel3/%23Activities`, label: 'Automation Studio', timeout: 32000 },
-        { url: `https://mc.${stack}.exacttarget.com/cloud/#app/Journey%20Builder`, label: 'Journey Builder', timeout: 30000 }
-    ];
-    chrome.runtime.sendMessage(
-        { type: 'OPEN_GHOST_TABS', urls: ghostUrls },
-        () => { void chrome.runtime.lastError; }
-    );
-
-    // 3. Poll for tokens every 2s for up to 30s
-    let polls = 0;
-    const pollId = setInterval(() => {
-        polls++;
-        chrome.runtime.sendMessage({ type: 'GET_TOKENS' }, res => {
-            if (!res || !res.success) return;
-            S.pageHookToken = res.tokens.pageHookToken || S.pageHookToken;
-            S.appcoreToken  = res.tokens.appcoreToken  || S.appcoreToken;
-            S.deToken       = res.tokens.deToken       || S.deToken;
-            S.autoToken     = res.tokens.autoToken     || S.autoToken;
-            S.journeyToken  = res.tokens.journeyToken  || S.journeyToken;
+    safeSendMessage({ type: 'FETCH_CSRF', instance }, (res) => {
+        S.sessionOk = !!(res && res.sessionOk);
+        loadTokens(() => {
             updateTokenBadges();
-
-            const captured = [S.pageHookToken, S.deToken, S.autoToken, S.journeyToken].filter(Boolean).length;
-            if (captured === 4 || polls >= 15) {
-                clearInterval(pollId);
-                if (captured === 4) toast('All tokens captured!', 'success');
-                else toast(`${captured}/4 tokens captured — navigate to missing SFMC sections`, captured > 0 ? 'warning' : 'error');
+            if (silent) return;
+            if (S.sessionOk) {
+                toast('Session active — SFMC reachable', 'success');
+            } else if (res && res.hint) {
+                toast(res.hint, 'warning');
+            } else if (!res) {
+                // No response = orphaned content script after extension reload. Reload the page.
+                toast('Extension reloaded — refresh this SFMC tab', 'warning');
+            } else {
+                toast('Could not reach SFMC — open an SFMC tab and sign in', 'error');
             }
         });
-    }, 2000);
+    });
 }
 
 function loadTokens(cb) {
-    chrome.runtime.sendMessage({ type: 'GET_TOKENS' }, res => {
-        if (res && res.success) {
-            S.pageHookToken = res.tokens.pageHookToken;
-            S.appcoreToken  = res.tokens.appcoreToken;
-            S.deToken       = res.tokens.deToken;
-            S.autoToken     = res.tokens.autoToken;
-            S.journeyToken  = res.tokens.journeyToken;
+    safeSendMessage({ type: 'GET_TOKENS_DETAILED' }, res => {
+        if (res && res.success && res.tokens) {
+            const t = res.tokens;
+            // Functional tokens — fallbacks kept for API calls
+            S.pageHookToken = t.cb.value;
+            S.appcoreToken  = t.admin.value;
+            S.deToken       = t.de.value      || t.admin.value || null;
+            S.autoToken     = t.auto.value    || t.admin.value || null;
+            S.journeyToken  = t.journey.value || t.admin.value || null;
+            // Section-specific flags — used by badge.
+            // Auto and Journey accept adminToken as valid fallback (confirmed to work).
+            // CB and DE need their own tokens (CB via pageToken, DE via FETCH_CSRF).
+            S._tokenSection = {
+                cb:      !!t.cb.value,
+                de:      !!t.de.value,
+                auto:    !!(t.auto.value || t.admin.value),
+                journey: !!(t.journey.value || t.admin.value)
+            };
         }
         updateTokenBadges();
         if (cb) cb();
@@ -254,16 +317,18 @@ function loadTokens(cb) {
 function updateTokenBadges() {
     const badge = document.getElementById('scout-badge-token');
     if (!badge) return;
-    const tokens = [S.pageHookToken, S.deToken, S.autoToken, S.journeyToken];
-    const captured = tokens.filter(Boolean).length;
-    const total = tokens.length;
+    // Reads APIs go through the cookie-only /cloud/fuelapi/ proxy. The badge now
+    // reflects "is there an active SFMC session reachable from this browser" —
+    // which is the only thing the panel cares about. CSRF tokens are still
+    // captured passively for the few write endpoints, but they aren't a
+    // user-actionable state anymore so we don't surface a per-section count.
     let cls, text;
-    if (captured === 0) {
-        cls = 'missing'; text = 'No Tokens';
-    } else if (captured < total) {
-        cls = 'partial'; text = captured + '/' + total + ' Tokens';
+    if (S.sessionOk === true) {
+        cls = 'ok'; text = 'Session';
+    } else if (S.sessionOk === false) {
+        cls = 'missing'; text = 'No Session';
     } else {
-        cls = 'ok'; text = 'All Tokens';
+        cls = 'loading'; text = 'Session';
     }
     badge.className = 'scout-token-badge ' + cls;
     badge.innerHTML = '<span class="scout-token-dot"></span> ' + text;
@@ -274,10 +339,14 @@ function applyTheme() {
     const toggle = document.getElementById('scout-toggle');
     const btn = document.getElementById('scout-theme-btn');
     const overlay = document.getElementById('scout-about-overlay');
+    const toastContainer = document.getElementById('scout-toast-container');
     const isLight = S.theme === 'light';
     if (panel) panel.classList.toggle('scout-light', isLight);
     if (toggle) toggle.classList.toggle('scout-light', isLight);
     if (overlay) overlay.classList.toggle('scout-light', isLight);
+    // Toast container is appended to <body>, not the panel, so it needs its own
+    // theme-class sync to flip alongside the panel.
+    if (toastContainer) toastContainer.classList.toggle('scout-light', isLight);
     if (btn) btn.innerHTML = isLight ? I.moon : I.sun;
     if (btn) btn.title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
 }
@@ -324,8 +393,7 @@ function buildPanelHTML() {
     <div class="scout-statusbar">
         <span class="scout-statusbar-stack">${stack ? stack.toUpperCase() : '——'}</span>
         <div class="scout-statusbar-right">
-            <button class="scout-statusbar-btn" id="scout-recapture-btn" title="Re-capture tokens" aria-label="Refresh tokens">${I.refresh}</button>
-            <span id="scout-badge-token" class="scout-token-badge loading"><span class="scout-token-dot"></span> Token</span>
+            <span id="scout-badge-token" class="scout-token-badge loading" title="Click to verify SFMC session" style="cursor:pointer;"><span class="scout-token-dot"></span> Session</span>
         </div>
     </div>
 </div>`;
@@ -555,6 +623,7 @@ function renderSearchRows() {
         return (ai===-1?99:ai)-(bi===-1?99:bi);
     });
     const seenGroups = new Set();
+    const GROUP_COLLAPSE_THRESHOLD = 10;
     let html = '';
     orderedKeys.forEach(key => {
         const groupKey = key === 'data-extension' ? 'de' : key;
@@ -563,8 +632,15 @@ function renderSearchRows() {
         const items = key === 'de' ? (grouped['de']||[]).concat(grouped['data-extension']||[]) : (grouped[key]||[]);
         if (!items.length) return;
         const label = groupLabels[key] || key;
+        // Groups with more than N items collapse to the first N by default and
+        // expand on click — keeps "test" searches scrollable instead of dumping
+        // hundreds of rows at once.
+        const isExpanded = S.searchExpandedGroups.has(groupKey);
+        const showAll = isExpanded || items.length <= GROUP_COLLAPSE_THRESHOLD;
+        const visibleItems = showAll ? items : items.slice(0, GROUP_COLLAPSE_THRESHOLD);
+        const hiddenCount = items.length - visibleItems.length;
         html += `<div class="scout-group-label">${escHtml(label)} <span class="scout-group-count">${items.length}</span></div>`;
-        items.forEach(({ r, idx }) => {
+        visibleItems.forEach(({ r, idx }) => {
             const color = getTypeColor(r.type);
             const icon = getTypeIcon(r.type);
             const name = escHtml(r.name || r.Name || 'Unnamed');
@@ -594,6 +670,9 @@ function renderSearchRows() {
                 <span class="scout-result-row-arrow" style="opacity:${isAssetLike ? '0.45' : '1'}">${isAssetLike ? I.copy : I.chevRight}</span>
             </div>`;
         });
+        if (hiddenCount > 0) {
+            html += `<div class="scout-group-expand" data-group="${escHtml(groupKey)}" role="button" tabindex="0">${I.chevRight} Show all ${items.length} ${escHtml(label.toLowerCase())} <span class="scout-group-expand-hint">(+${hiddenCount} more)</span></div>`;
+        }
     });
     return html || `<div class="scout-list-state scout-list-empty">No results</div>`;
 }
@@ -608,6 +687,18 @@ function renderSearchResults() {
 
 function bindSearchRowEvents(cont) {
     if (!cont) return;
+    cont.querySelectorAll('.scout-group-expand').forEach(el => {
+        const expand = () => {
+            const groupKey = el.dataset.group;
+            if (!groupKey) return;
+            S.searchExpandedGroups.add(groupKey);
+            renderSearchResults();
+        };
+        el.addEventListener('click', expand);
+        el.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); }
+        });
+    });
     cont.querySelectorAll('.scout-result-row').forEach(row => {
         row.addEventListener('click', () => {
             const idx = parseInt(row.dataset.idx, 10);
@@ -661,6 +752,7 @@ function runSearch() {
     if (S.activeSearchPort) { try { S.activeSearchPort.disconnect(); } catch (_) {} S.activeSearchPort = null; }
     S.allSearchResults = [];
     S.searchResults = [];
+    S.searchExpandedGroups = new Set();
     S.searchLoading = true;
     const resultsDiv = document.getElementById('scout-search-results');
     if (resultsDiv) resultsDiv.innerHTML = `<div class="scout-loading-state">${I.spinner} Searching…</div>`;
@@ -865,7 +957,7 @@ function openAutomationDetail(automationId, name) {
                 overviewEl.innerHTML = buildAutoOverviewGridHtml(S.autoDetail);
             };
             sfmcFetch(
-                `https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi/legacy/v1/beta/bulk/automations/automation/definition/${automationId}`,
+                `https://${instance}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/bulk/automations/automation/definition/${automationId}`,
                 'GET', { 'accept': 'application/json' }
             ).then(d => {
                 if (!d || !S.autoDetail) return;
@@ -882,7 +974,7 @@ function openAutomationDetail(automationId, name) {
                 enrichOverview();
             }).catch(() => {});
             sfmcFetch(
-                `https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi/automation/v1/automations/${automationId}?view=targetObjects`,
+                `https://${instance}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${automationId}?view=targetObjects`,
                 'GET', { 'accept': 'application/json' }
             ).then(d => {
                 if (!d || !S.autoDetail) return;
@@ -1558,7 +1650,7 @@ function openDEDetail(de) {
     const container = document.getElementById('scout-de-body');
     if (container) renderDEDetail(container);
     // Fetch DE details including fields
-    const url = `https://${instance}.marketingcloudapps.com/contactsmeta/fuelapi/internal/v1/customobjects/${de.id}/fields`;
+    const url = `https://${instance}.exacttarget.com/cloud/fuelapi/internal/v1/customobjects/${de.id}/fields`;
     chrome.runtime.sendMessage({ type: 'MAKE_REQUEST', url, method: 'GET', headers: { 'accept': 'application/json' } }, res => {
         if (res && res.ok && res.data) {
             S.deDetail.fields = res.data.items || res.data.fields || res.data || [];
@@ -1594,21 +1686,56 @@ function renderDEDetail(container) {
                 </tr>`).join('')}
                 </tbody></table></div>`;
     // Kick off usage count fetches — store raw results for click-to-expand
-    let usageCounts = { queries: '...', automations: '...', journeys: '...' };
-    let usageData   = { queries: null, automations: null, journeys: null };
+    let usageCounts  = { queries: '...', automations: null, journeys: null };
+    let usageData    = { queries: null,   automations: null, journeys: null };
+    let usageState   = { queries: 'loading', automations: 'idle', journeys: 'idle' };
+    let usageProgress = { automations: null, journeys: null }; // { done, total } during index build
+    let usagePort    = { automations: null, journeys: null }; // active streaming port per type
     let usageExpanded = null;
     const usageDiv = () => document.getElementById('scout-de-usage');
 
-    function renderUsageCounts(u) {
+    function renderNumDisplay(type) {
+        const state = usageState[type];
+        if (state === 'idle') return `<span style="font-size:10px;opacity:0.5;letter-spacing:0">Load</span>`;
+        if (state === 'loading') {
+            const p = usageProgress[type];
+            if (!p) return I.spinner;
+            // Journeys have a second phase: event definition fetching
+            if (typeof p.evTotal === 'number' && p.evTotal > 0) {
+                return `<span style="font-size:9px;line-height:1.2">${p.evDone}<br><span style="opacity:0.5">/${p.evTotal}ev</span></span>`;
+            }
+            return `<span style="font-size:9px;line-height:1.2">${p.done}<br><span style="opacity:0.5">/${p.total}</span></span>`;
+        }
+        if (state === 'loaded') return usageCounts[type] !== null ? usageCounts[type] : '0';
+        if (state === 'error') return `<span style="color:var(--scout-error,#f87171)">!</span>`;
+        return I.spinner;
+    }
+
+    function renderUsageCounts() {
         const labels = { queries: 'Queries', automations: 'Automations', journeys: 'Journeys' };
-        const items = ['queries', 'automations', 'journeys'].map(type =>
-            `<button class="scout-stat-item${usageExpanded === type ? ' active' : ''}" data-usage-type="${type}" ${usageData[type] === null ? 'disabled' : ''}>
-                <div class="scout-stat-num">${u[type] === null ? I.spinner : u[type]}</div>
+        const items = ['queries', 'automations', 'journeys'].map(type => {
+            const isActive = usageExpanded === type;
+            const showRefresh = usageState[type] === 'loaded';
+            return `<button class="scout-stat-item${isActive ? ' active' : ''}" id="scout-stat-btn-${type}" data-usage-type="${type}" style="position:relative;">
+                <div class="scout-stat-num" id="scout-stat-num-${type}">${renderNumDisplay(type)}</div>
                 <div class="scout-stat-label">${labels[type]}</div>
-            </button>`
-        ).join('');
+                <span class="scout-usage-refresh" id="scout-stat-refresh-${type}" data-refresh-type="${type}" title="Refresh" style="position:absolute;top:2px;right:4px;font-size:11px;opacity:0.35;cursor:pointer;line-height:1;${showRefresh ? '' : 'display:none'}">↻</span>
+            </button>`;
+        }).join('');
         const detail = usageExpanded ? renderUsageDetail(usageExpanded) : '';
         return `<div class="scout-stat-row">${items}</div>${detail ? `<div class="scout-usage-detail">${detail}</div>` : ''}`;
+    }
+
+    // Update only the number display for one section — does NOT touch other sections or detail.
+    function updateStatNum(type) {
+        const numEl = document.getElementById(`scout-stat-num-${type}`);
+        if (numEl) numEl.innerHTML = renderNumDisplay(type);
+        // Show/hide refresh icon based on state
+        const refreshEl = document.getElementById(`scout-stat-refresh-${type}`);
+        if (refreshEl) refreshEl.style.display = usageState[type] === 'loaded' ? '' : 'none';
+        // Update active class on button
+        const btn = document.getElementById(`scout-stat-btn-${type}`);
+        if (btn) btn.classList.toggle('active', usageExpanded === type);
     }
 
     function renderUsageDetail(type) {
@@ -1648,15 +1775,47 @@ function renderDEDetail(container) {
     function bindUsageInteractions() {
         const div = usageDiv();
         if (!div) return;
+
+        // ── Stat buttons ────────────────────────────────────────────────────
         div.querySelectorAll('.scout-stat-item[data-usage-type]').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                // Don't trigger load when the refresh icon inside the button is clicked
+                if (e.target.closest('.scout-usage-refresh')) return;
                 const type = btn.dataset.usageType;
-                if (usageData[type] === null) return;
-                usageExpanded = (usageExpanded === type) ? null : type;
-                if (usageDiv()) usageDiv().innerHTML = renderUsageCounts(usageCounts);
-                bindUsageInteractions();
+                const state = usageState[type];
+                if (state === 'idle' || state === 'error') {
+                    loadUsageStreaming(type);
+                } else if (state === 'loading') {
+                    // Cancel in-flight load
+                    if (usagePort[type]) { try { usagePort[type].disconnect(); } catch (_) {} usagePort[type] = null; }
+                    usageState[type] = 'idle';
+                    usageProgress[type] = null;
+                    if (usageDiv()) { usageDiv().innerHTML = renderUsageCounts(); bindUsageInteractions(); }
+                } else if (state === 'loaded') {
+                    usageExpanded = (usageExpanded === type) ? null : type;
+                    if (usageDiv()) { usageDiv().innerHTML = renderUsageCounts(); bindUsageInteractions(); }
+                }
             });
         });
+
+        // ── Refresh icons ───────────────────────────────────────────────────
+        div.querySelectorAll('.scout-usage-refresh[data-refresh-type]').forEach(icon => {
+            icon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const type = icon.dataset.refreshType;
+                chrome.runtime.sendMessage({ action: 'invalidateUsageIndex', instance, indexType: type }, () => {
+                    usageState[type] = 'idle';
+                    usageData[type] = null;
+                    usageCounts[type] = null;
+                    usageProgress[type] = null;
+                    if (usageExpanded === type) usageExpanded = null;
+                    if (usageDiv()) { usageDiv().innerHTML = renderUsageCounts(); bindUsageInteractions(); }
+                    loadUsageStreaming(type);
+                });
+            });
+        });
+
+        // ── Automation nav links ────────────────────────────────────────────
         div.querySelectorAll('.scout-usage-nav[data-auto-id]').forEach(btn => {
             btn.addEventListener('click', () => {
                 S.tab = 'automations';
@@ -1664,11 +1823,13 @@ function renderDEDetail(container) {
                 openAutomationDetail(btn.dataset.autoId, btn.dataset.autoName);
             });
         });
+
+        // ── Query SQL expand/collapse ───────────────────────────────────────
         div.querySelectorAll('.scout-usage-query-item[data-qidx]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const qi = btn.dataset.qidx;
                 const detail = document.getElementById('scout-qdetail-' + qi);
-                const arrow = document.getElementById('scout-qarrow-' + qi);
+                const arrow  = document.getElementById('scout-qarrow-' + qi);
                 if (!detail) return;
                 const open = detail.style.display !== 'none';
                 detail.style.display = open ? 'none' : 'block';
@@ -1677,6 +1838,7 @@ function renderDEDetail(container) {
         });
     }
 
+    // Queries still load immediately (1 request, instant)
     const loadUsage = (type, action) => {
         chrome.runtime.sendMessage({ action, deName: d.name, deKey: d.customerKey || '', deId: d.id, instance }, res => {
             if (res && res.success) {
@@ -1688,15 +1850,63 @@ function renderDEDetail(container) {
                 usageData[type] = [];
                 usageCounts[type] = '?';
             }
+            usageState[type] = 'loaded';
             if (usageDiv()) {
-                usageDiv().innerHTML = renderUsageCounts(usageCounts);
+                usageDiv().innerHTML = renderUsageCounts();
                 bindUsageInteractions();
             }
         });
     };
     loadUsage('queries', 'fetchDEUsageQueries');
-    loadUsage('automations', 'fetchDEUsageAutomations');
-    loadUsage('journeys', 'fetchDEUsageJourneys');
+    // Automations and journeys are lazy — only load when user clicks their stat button.
+
+    // Streaming load for automations and journeys (on-demand, with live progress)
+    const loadUsageStreaming = (type) => {
+        if (usageState[type] === 'loading') return;
+        usageState[type] = 'loading';
+        usageProgress[type] = null;
+        updateStatNum(type);
+
+        const portName = type === 'automations' ? 'fetchDEUsageAutomationsStream' : 'fetchDEUsageJourneysStream';
+        const port = chrome.runtime.connect({ name: portName });
+        usagePort[type] = port;
+        port.postMessage({ action: portName, deName: d.name, deKey: d.customerKey || '', deId: d.id, instance });
+
+        port.onMessage.addListener((msg) => {
+            if (msg.type === 'progress') {
+                // Surgical update — only the number span for this type, other sections untouched
+                // Store full message so renderNumDisplay can show event-def phase for journeys
+                usageProgress[type] = msg;
+                updateStatNum(type);
+            } else if (msg.type === 'result') {
+                usageData[type] = msg.data;
+                usageCounts[type] = msg.data.length;
+                usageState[type] = 'loaded';
+                usagePort[type] = null;
+                updateStatNum(type);
+                // If this section is currently expanded, re-render its detail
+                if (usageExpanded === type && usageDiv()) {
+                    const detailEl = usageDiv().querySelector('.scout-usage-detail');
+                    if (detailEl) { detailEl.innerHTML = renderUsageDetail(type); bindUsageInteractions(); }
+                    else { usageDiv().innerHTML = renderUsageCounts(); bindUsageInteractions(); }
+                }
+            } else if (msg.type === 'error') {
+                usageState[type] = 'error';
+                usageCounts[type] = '!';
+                usagePort[type] = null;
+                updateStatNum(type);
+            }
+        });
+
+        port.onDisconnect.addListener(() => {
+            usagePort[type] = null;
+            if (usageState[type] === 'loading') {
+                usageState[type] = 'idle';
+                usageProgress[type] = null;
+                updateStatNum(type);
+            }
+        });
+    };
 
     container.innerHTML = `
 <div class="scout-detail-header">
@@ -1704,7 +1914,19 @@ function renderDEDetail(container) {
     <span class="scout-detail-header-title">${escHtml(d.name)}</span>
 </div>
 <div class="scout-overview-card">
-    <div class="scout-section-title">Overview</div>
+    <div class="scout-overview-card-header">
+        <div class="scout-section-title">Overview</div>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <span id="scout-de-export-status" style="font-size:11px;color:var(--scout-text-muted);"></span>
+            <div style="position:relative;">
+                <button class="scout-btn scout-btn-secondary" id="scout-de-export-records">${I.download} Export ${I.chevDown}</button>
+                <div id="scout-de-export-menu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--scout-bg-panel);border:1px solid var(--scout-border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);min-width:140px;z-index:9999;overflow:hidden;">
+                    <button class="scout-export-menu-item" data-fmt="csv">CSV (.csv)</button>
+                    <button class="scout-export-menu-item" data-fmt="txt">Tab delimited (.txt)</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="scout-overview-grid">
         ${d.customerKey ? `<div class="scout-overview-item"><label>External Key</label><span class="scout-monospace">${escHtml(d.customerKey)}</span></div>` : ''}
         ${d.rowCount != null ? `<div class="scout-overview-item"><label>Row Count</label><span>${Number(d.rowCount).toLocaleString()}</span></div>` : ''}
@@ -1718,7 +1940,7 @@ function renderDEDetail(container) {
 </div>
 <div class="scout-overview-card">
     <div class="scout-section-title">Used In</div>
-    <div id="scout-de-usage" class="scout-usage-row">${renderUsageCounts(usageCounts)}</div>
+    <div id="scout-de-usage" class="scout-usage-row">${renderUsageCounts()}</div>
 </div>
 <div class="scout-overview-card">
     <div class="scout-overview-card-header">
@@ -1727,10 +1949,97 @@ function renderDEDetail(container) {
     </div>
     ${fieldsHtml}
 </div>`;
+    container.querySelector('#scout-de-export-records')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = document.getElementById('scout-de-export-menu');
+        if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    });
+    container.querySelectorAll('.scout-export-menu-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const menu = document.getElementById('scout-de-export-menu');
+            if (menu) menu.style.display = 'none';
+            const statusEl = document.getElementById('scout-de-export-status');
+            exportDERecordsCSV(d.id, d.name, statusEl, item.dataset.fmt);
+        });
+    });
+    document.addEventListener('click', function closeExportMenu() {
+        const menu = document.getElementById('scout-de-export-menu');
+        if (menu) menu.style.display = 'none';
+        document.removeEventListener('click', closeExportMenu);
+    });
     container.querySelector('#scout-back-de')?.addEventListener('click', () => {
         S.deDetail = null;
         renderDESearch(container); // renderDESearch restores S.deSearchQuery + S.deSearchResults
     });
+}
+
+async function exportDERecordsCSV(deId, deName, statusEl, fmt = 'csv') {
+    const PAGE_SIZE = 500;
+    const BATCH_SIZE = 5; // parallel requests per batch
+    const delimiter = fmt === 'txt' ? '\t' : ',';
+    const setStatus = (msg) => { if (statusEl) statusEl.textContent = msg; };
+
+    const fetchPage = (page) => new Promise((resolve, reject) => {
+        const url = `https://${instance}.exacttarget.com/cloud/fuelapi/internal/v1/CustomObjectData/${deId}?$page=${page}&$pagesize=${PAGE_SIZE}&preciseDateTime=true&_=${Date.now()}`;
+        chrome.runtime.sendMessage({ type: 'MAKE_REQUEST', url, method: 'GET', headers: { 'accept': 'application/json' } }, res => {
+            if (!res || !res.ok) return reject(new Error(res?.error || 'Request failed'));
+            resolve(res.data);
+        });
+    });
+
+    try {
+        setStatus('Fetching…');
+        const first = await fetchPage(1);
+        const totalCount = first?.count || 0;
+
+        if (!totalCount) {
+            setStatus('No records');
+            setTimeout(() => setStatus(''), 3000);
+            return;
+        }
+
+        let allItems = first.items || [];
+        const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+        setStatus(`${allItems.length} / ${totalCount}`);
+
+        // Fetch remaining pages in parallel batches
+        const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+        for (let b = 0; b < remainingPages.length; b += BATCH_SIZE) {
+            const batch = remainingPages.slice(b, b + BATCH_SIZE);
+            const results = await Promise.all(batch.map(p => fetchPage(p)));
+            results.forEach(r => allItems = allItems.concat(r.items || []));
+            setStatus(`${allItems.length} / ${totalCount}`);
+        }
+
+        // Build CSV — headers from first item keys
+        const headers = Object.keys(allItems[0] || {});
+        if (!headers.length) { setStatus('No data'); return; }
+
+        const escape = fmt === 'txt'
+            ? (v) => String(v ?? '').replace(/\t/g, ' ')   // tabs in values → space for TSV
+            : (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const csvRows = [
+            headers.map(escape).join(delimiter),
+            ...allItems.map(item => headers.map(h => escape(item[h])).join(delimiter))
+        ];
+        const csv = csvRows.join('\n');
+
+        const mimeType = fmt === 'txt' ? 'text/plain' : 'text/csv';
+        const blob = new Blob([csv], { type: mimeType });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `${(deName || 'data-extension').replace(/[^a-z0-9_-]/gi, '_')}-records.${fmt}`;
+        a.click();
+        URL.revokeObjectURL(blobUrl);
+
+        setStatus(`✓ ${allItems.length} rows`);
+        setTimeout(() => setStatus(''), 4000);
+
+    } catch (err) {
+        setStatus('Error: ' + err.message);
+        setTimeout(() => setStatus(''), 5000);
+    }
 }
 
 function syncFieldsFromDOM() {
@@ -1833,7 +2142,7 @@ function renderDEReport(container) {
     document.getElementById('scout-report-html-btn')?.addEventListener('click', () => {
         const statusDiv = document.getElementById('scout-report-status');
         if (statusDiv) statusDiv.innerHTML = `<div class="scout-loading-state">${I.spinner} Generating report…</div>`;
-        chrome.runtime.sendMessage({ action: 'generateReport', format: 'html', instance }, res => {
+        chrome.runtime.sendMessage({ action: 'generateReport', format: 'html', instance, theme: S.theme }, res => {
             if (res && res.success && res.html) {
                 const blob = new Blob([res.html], { type: 'text/html' });
                 const url = URL.createObjectURL(blob);
@@ -2010,7 +2319,7 @@ async function generateAutomationsReport(statusEl) {
         // Primary endpoint — full list with pagination
         let allAutos = [], page = 1;
         while (true) {
-            const d = await sfmcFetch(`https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi/automation/v1/automations?$page=${page}&$pagesize=500`);
+            const d = await sfmcFetch(`https://${instance}.exacttarget.com/cloud/fuelapi/automation/v1/automations?$page=${page}&$pagesize=500`);
             const items = d && (d.items || d.entry || []);
             if (!items.length) break;
             allAutos = allAutos.concat(items);
@@ -2185,7 +2494,7 @@ async function generateAssetsReport(statusEl) {
 async function generateActivitiesReport(statusEl) {
     if (statusEl) statusEl.innerHTML = `<div class="scout-loading-state">${I.spinner} Fetching activities…</div>`;
     try {
-        const base = `https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi`;
+        const base = `https://${instance}.exacttarget.com/cloud/fuelapi`;
         const [sqlData, scriptData, filterData, sendEmailData, importData, fileXferData, dataExtractData] = await Promise.allSettled([
             sfmcFetch(`${base}/automation/v1/queries/?$page=1&$pageSize=500&$orderBy=modifiedDate%20desc&retrievalType=1`),
             sfmcFetch(`${base}/automation/v1/scripts/?$page=1&$pageSize=500&$orderBy=modifiedDate%20desc`),
@@ -2244,7 +2553,7 @@ async function loadActivitiesForPanel() {
     if (S.actListLoading) return;
     S.actListLoading = true;
     renderReportSubView(document.getElementById('scout-reports-body'));
-    const base = `https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi`;
+    const base = `https://${instance}.exacttarget.com/cloud/fuelapi`;
     const [sqlD, scrD, filD, semD, impD, fxD, dexD] = await Promise.allSettled([
         sfmcFetch(`${base}/automation/v1/queries/?$page=1&$pageSize=500&$orderBy=modifiedDate%20desc&retrievalType=1`),
         sfmcFetch(`${base}/automation/v1/scripts/?$page=1&$pageSize=500&$orderBy=modifiedDate%20desc`),
@@ -2268,7 +2577,7 @@ async function loadActivitiesForPanel() {
 async function openActivityDetail(act) {
     S.actDetail = { act, loading: true, data: null };
     renderReportSubView(document.getElementById('scout-reports-body'));
-    const base = `https://${instance}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi`;
+    const base = `https://${instance}.exacttarget.com/cloud/fuelapi`;
     const key = act.key || act.customerKey || act.CustomerKey;
     let data = null;
     try {
@@ -2470,21 +2779,16 @@ function renderReportSubView(container) {
                 const st = document.getElementById('de-report-status');
                 if (st) st.innerHTML = `<div class="scout-loading-state">${I.spinner} Generating…</div>`;
                 const logoUrl = await getLogoDataUrl();
-                const isLight = S.theme === 'light';
-                chrome.runtime.sendMessage({ action: 'generateReport', format: 'html', instance }, res => {
+                // Theme flows server-side so the report CSS is generated correctly the first time
+                // (no brittle </head> string-replace, no light-mode bleed when panel is in dark).
+                chrome.runtime.sendMessage({ action: 'generateReport', format: 'html', instance, theme: S.theme }, res => {
                     if (res && res.success && res.html) {
                         let html = res.html;
-                        // Inject logo into DE report header
                         if (logoUrl) {
                             html = html.replace(
                                 '<h1 class="report-title">',
                                 `<img src="${logoUrl}" style="width:28px;height:28px;border-radius:6px;object-fit:contain;flex-shrink:0;" alt="SFMC Scout"><h1 class="report-title">`
                             );
-                        }
-                        // Apply current theme to DE report by injecting overriding style block
-                        if (isLight) {
-                            const lightOverride = `<style>:root{--bg:#F3F2F2!important;--bg2:#FFFFFF!important;--surface:#FFFFFF!important;--surf2:#F9F8F7!important;--border:rgba(0,0,0,0.08)!important;--border2:rgba(0,0,0,0.12)!important;--text:#032D60!important;--text2:#3E3E3C!important;--text3:#706E6B!important;--accent:#0176D3!important;--success:#04844B!important;--error:#C23934!important;}</style>`;
-                            html = html.replace('</head>', lightOverride + '</head>');
                         }
                         openBlobReport(html);
                         if (st) st.innerHTML = `<span class="scout-status-success">${I.check} ${res.count} DEs exported.</span>`;
@@ -2647,7 +2951,8 @@ function createPanel() {
     aboutOverlay.addEventListener('click', e => {
         if (e.target === aboutOverlay) aboutOverlay.classList.remove('open');
     });
-    document.getElementById('scout-recapture-btn')?.addEventListener('click', () => {
+    // Click the session badge to manually re-verify SFMC reachability
+    document.getElementById('scout-badge-token')?.addEventListener('click', () => {
         refreshAllTokensWithGhostTabs();
     });
 
@@ -2675,9 +2980,17 @@ function createPanel() {
         }
     });
 
-    // Load saved theme
+    // Load saved theme (or use the 'light' default) and apply it unconditionally.
+    // applyTheme() MUST run on every panel mount even when there's no stored value,
+    // otherwise the DOM stays in the hardcoded-HTML state (dark) while S.theme
+    // says 'light' — that mismatch is what caused the "first click does nothing"
+    // toggle bug: click 1 toggled S.theme light→dark with no visual change because
+    // the DOM was already dark, click 2 finally hit a real transition.
     chrome.storage.local.get(['scout_theme'], res => {
-        if (res.scout_theme) { S.theme = res.scout_theme; applyTheme(); }
+        if (res.scout_theme === 'light' || res.scout_theme === 'dark') {
+            S.theme = res.scout_theme;
+        }
+        applyTheme();
     });
 }
 
@@ -2696,14 +3009,11 @@ function togglePanel() {
             renderCurrentView();
             updateTokenBadges();
         });
+        // Quietly probe the session on first open so the badge reflects reality
+        // without nagging the user with a toast.
         if (!S.panelOpenedOnce) {
             S.panelOpenedOnce = true;
-            // First open: only capture tokens if we don't already have them all
-            chrome.runtime.sendMessage({ type: 'GET_TOKENS' }, res => {
-                const t = res && res.tokens;
-                const captured = t ? [t.cbToken, t.deToken, t.autoToken, t.journeyToken].filter(Boolean).length : 0;
-                if (captured < 4) setTimeout(() => refreshAllTokensWithGhostTabs(), 800);
-            });
+            refreshAllTokensWithGhostTabs(true);
         }
     }
 }

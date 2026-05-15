@@ -18,19 +18,14 @@ export async function handleFetchFieldDefinitions(request, sendResponse) {
     }
 
     const INSTANCE = await InstanceService.getInstance();
-    const url = `https://${INSTANCE}.marketingcloudapps.com/contactsmeta/fuelapi/internal/v1/customobjects/${deId}/fields`;
+    // Cookie-only proxy on the main domain — no CSRF token needed for reads
+    const url = `https://${INSTANCE}.exacttarget.com/cloud/fuelapi/internal/v1/customobjects/${deId}/fields`;
 
     try {
-        // Get CSRF token for consistency
-        const csrfToken = await CSRFService.getToken(INSTANCE);
-
         const response = await fetch(url, {
-            headers: {
-                "accept": "application/json",
-                "x-csrf-token": csrfToken
-            },
+            headers: { "accept": "application/json" },
             method: "GET",
-            credentials: "include" // Crucial for using browser cookies
+            credentials: "include"
         });
 
         if (!response.ok) {

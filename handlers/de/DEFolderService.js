@@ -31,7 +31,7 @@ export async function getOrCreateFolder(folderPath, instance) {
 
 async function getFolderChildren(parentId, instance) {
     const inst = instance || 'mc.s51';
-    const url = `https://${inst}.marketingcloudapps.com/contactsmeta/fuelapi/legacy/v1/beta/folder/${parentId}/children` +
+    const url = `https://${inst}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/folder/${parentId}/children` +
         `?$pageSize=500&$page=1&_type=DataExtension`;
 
     try {
@@ -49,7 +49,7 @@ async function getFolderChildren(parentId, instance) {
 
 async function createFolder(name, parentId, instance) {
     const inst = instance || 'mc.s51';
-    const url = `https://${inst}.marketingcloudapps.com/contactsmeta/fuelapi/legacy/v1/beta/folder/`;
+    const url = `https://${inst}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/folder/`;
 
     const payload = {
         name,

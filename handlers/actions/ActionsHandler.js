@@ -372,9 +372,9 @@ export async function handleGenerateReport(request, sendResponse) {
             const csv = generateReportCsv(allDeData);
             sendResponse({ success: true, count: allDeData.length, csv });
         } else {
-            
-            const reportHtml = generateReportHtml(allDeData, fullInstance);
-            
+            // theme is sent from content.js (mirrors panel theme); default to dark.
+            const theme = request.theme === 'light' ? 'light' : 'dark';
+            const reportHtml = generateReportHtml(allDeData, fullInstance, theme);
             sendResponse({ success: true, count: allDeData.length, html: reportHtml });
         }
     } catch (error) {

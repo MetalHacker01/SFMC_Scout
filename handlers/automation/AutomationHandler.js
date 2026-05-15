@@ -24,7 +24,7 @@ export async function handleFetchAutomationDetails(request, sendResponse) {
         
         // Example API endpoint (adjust based on actual SFMC API)
         // Note: This is a placeholder - actual endpoint may vary
-        const url = `https://${sfmcInstance}.marketingcloudapps.com/automationStudio/fuelapi/v1/automation/${automationId}`;
+        const url = `https://${sfmcInstance}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${automationId}`;
         
         const response = await fetch(url, {
             method: 'GET',
@@ -71,7 +71,7 @@ export async function handleFetchAutomationSteps(request, sendResponse) {
         
         // Example API endpoint (adjust based on actual SFMC API)
         // Note: This is a placeholder - actual endpoint may vary
-        const url = `https://${sfmcInstance}.marketingcloudapps.com/automationStudio/fuelapi/v1/automation/${automationId}/steps`;
+        const url = `https://${sfmcInstance}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${automationId}/steps`;
         
         const response = await fetch(url, {
             method: 'GET',

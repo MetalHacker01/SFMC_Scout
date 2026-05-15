@@ -62,56 +62,48 @@ export async function fetchFolderChildren(parentId, instance) {
         let apiUrl;
         let isRootLevel = false;
         
+        // Folder types that can host (or route to) Data Extensions in the Create-DE picker.
+        // SFMC returns variants like "dataextension", "shared_data", "shared_dataextension",
+        // "synchronizeddataextension", "salesforcedataextension" — so we substring-match on
+        // "dataextension" or "shared_data" instead of a strict Set lookup. This mirrors the
+        // matching used by DESearchService for shared-tree traversal which is known to work.
+        const isDeFolder = (item) => {
+            const t = String(item.type || '').toLowerCase();
+            return t.includes('dataextension') || t.includes('shared_data') || item.iconType === 'folder';
+        };
+
         if (parentId) {
             apiUrl = `${API_BASE_URL}/legacy/v1/beta/folder/${parentId}/children?Localization=true&$top=1000`;
         } else {
-            apiUrl = `${API_BASE_URL}/legacy/v1/beta/folder?$where=allowedtypes%20in%20(%20%27dataextension%27)&Localization=true`;
+            apiUrl = `${API_BASE_URL}/legacy/v1/beta/folder?$where=allowedtypes%20in%20(%27dataextension%27,%27shared_data%27,%27synchronizeddataextension%27,%27salesforcedataextension%27)&Localization=true`;
             isRootLevel = true;
         }
-        
+
         const response = await fetch(apiUrl, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include'
         });
-        
+
         if (!response.ok) {
             throw new Error(`Failed to fetch folders: ${response.status}`);
         }
-        
+
         const data = await response.json();
         let folders = [];
-        
+
         if (isRootLevel) {
-            // For root level, find the "Data Extensions" folder and return its children
-            if (data && data.entry && data.entry.length > 0) {
-                const dataExtensionsFolder = data.entry.find(folder =>
-                    folder.name === "Data Extensions" && folder.type === "dataextension"
-                );
-                
-                if (dataExtensionsFolder && dataExtensionsFolder.id) {
-                    // Recursively fetch children of the Data Extensions folder
-                    return await fetchFolderChildren(dataExtensionsFolder.id, instance);
-                }
-            }
-            // Fallback: return root folders if Data Extensions folder not found
-            if (data && data.items && data.items.length > 0) {
-                folders = data.items.filter(item => 
-                    item.type === 'dataextension' || item.iconType === 'folder'
-                );
-            } else if (data && data.entry && data.entry.length > 0) {
-                folders = data.entry.filter(item => 
-                    item.type === 'dataextension' || item.iconType === 'folder'
-                );
-            }
-        } else {
-            if (data && data.entry && data.entry.length > 0) {
-                folders = data.entry.filter(item => 
-                    item.type === 'dataextension' || item.iconType === 'folder'
-                );
-            }
+            const entries = (data && (data.entry || data.items)) || [];
+            // Return all roots (Data Extensions + Shared Items + etc.) so the picker can
+            // expand into cross-BU shared folders. The old behavior pinned to a single
+            // "Data Extensions" root and hid shared folders entirely.
+            folders = entries.filter(isDeFolder);
+        } else if (data && data.entry && data.entry.length > 0) {
+            folders = data.entry.filter(isDeFolder);
+        } else if (data && data.items && data.items.length > 0) {
+            folders = data.items.filter(isDeFolder);
         }
-        
+
         return folders;
     } catch (error) {
         throw error;
@@ -124,31 +116,57 @@ export async function fetchFolderChildren(parentId, instance) {
  * @param {string} instance - SFMC instance
  * @returns {Promise<Object|null>} Folder object
  */
+// Per-id folder lookup. The bulk-index approach (/automation/v1/folders/?$filter=
+// categorytype eq X) misses folders SFMC doesn't surface in the type-filtered list
+// — particularly nested folders under "Shared Items > Shared Data Extensions" —
+// causing every shared-DE path to fall back to [Unknown Folder].
+//
+// The per-id endpoint /legacy/v1/beta/folder/{id} returns {id, name, parentId, type}
+// for ANY folder regardless of type, works on the cookie-only proxy (verified via
+// HAR), and is what the original SFMC_Scout_Chrome shipped with. Results are
+// cached per categoryId so the cost is one HTTP per unique ancestor in a session.
 async function fetchFolder(categoryId, instance) {
     if (!categoryId || categoryId === '0') return null;
-    if (folderPathCache.has(`folder_${categoryId}`)) {
-        return folderPathCache.get(`folder_${categoryId}`);
+    const id = String(categoryId);
+    if (folderPathCache.has(`folder_${id}`)) {
+        return folderPathCache.get(`folder_${id}`);
     }
 
-    try {
-        const API_BASE_URL = InstanceService.getApiBaseUrl(instance);
-        const response = await fetch(`${API_BASE_URL}/legacy/v1/beta/folder/${categoryId}`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include'
-        });
+    const inst = (instance || 'mc.s51').replace(/^mc\./, '');
+    // Two endpoints, tried in order:
+    //   1. Cookie-only proxy on mc.{stack}.exacttarget.com/cloud/fuelapi/
+    //      — works for the user's own BU folders
+    //   2. Contactsmeta on mc.{stack}.marketingcloudapps.com/contactsmeta/fuelapi/
+    //      — works for shared / synchronized / Salesforce-linked folders that
+    //      live cross-BU. The original (pre-migration) build used this path
+    //      exclusively and resolved shared paths like "Shared Data Extensions /
+    //      Global" correctly — falling back to it here restores that behavior.
+    const urls = [
+        `https://mc.${inst}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/folder/${id}`,
+        `https://mc.${inst}.marketingcloudapps.com/contactsmeta/fuelapi/legacy/v1/beta/folder/${id}`
+    ];
 
-        if (!response.ok) {
-            throw new Error(`Failed to fetch folder: ${response.status}`);
-        }
-
-        const folder = await response.json();
-        folderPathCache.set(`folder_${categoryId}`, folder);
-        return folder;
-    } catch (error) {
-        folderPathCache.set(`folder_${categoryId}`, { error: true, name: '[Error Fetching Folder]' });
-        return folderPathCache.get(`folder_${categoryId}`);
+    for (const url of urls) {
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include'
+            });
+            if (!response.ok) continue;
+            const folder = await response.json();
+            if (!folder || (!folder.name && folder.name !== '')) continue;
+            const normalized = {
+                name: folder.name || '',
+                parentId: folder.parentId != null ? String(folder.parentId) : '0'
+            };
+            folderPathCache.set(`folder_${id}`, normalized);
+            return normalized;
+        } catch (_) { /* try next */ }
     }
+
+    // Don't poison the cache with an error sentinel — let a transient 5xx retry.
+    return { name: '[Unknown Folder]', parentId: '0', _transient: true };
 }
 
 /**

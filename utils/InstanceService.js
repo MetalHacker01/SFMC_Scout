@@ -75,7 +75,10 @@ export class InstanceService {
      */
     static getApiBaseUrl(instance) {
         const inst = instance || this._instance || 'mc.s51';
-        return `https://${inst}.marketingcloudapps.com/contactsmeta/fuelapi`;
+        // Cookie-only proxy on the main domain — accepts read APIs with session
+        // cookies, no CSRF token required. Write paths (DE create, field PATCH)
+        // still use marketingcloudapps.com directly with x-csrf-token.
+        return `https://${inst}.exacttarget.com/cloud/fuelapi`;
     }
     
     /**

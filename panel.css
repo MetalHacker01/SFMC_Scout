@@ -481,13 +481,62 @@
 .scout-result-row:hover .scout-result-row-arrow { color: var(--s-text-2); }
 
 /* Results section header */
-.scout-results-group-label {
+.scout-results-group-label,
+.scout-group-label {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--s-text-3);
   padding: 10px 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scout-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--s-surface-2);
+  color: var(--s-text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.scout-group-expand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 4px 0 8px;
+  border-radius: var(--s-radius);
+  cursor: pointer;
+  background: transparent;
+  border: 1px dashed var(--s-border-mid);
+  color: var(--s-accent);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.12s, border-color 0.12s;
+}
+.scout-group-expand:hover,
+.scout-group-expand:focus-visible {
+  background: var(--s-surface-2);
+  border-color: var(--s-accent);
+  outline: none;
+}
+.scout-group-expand svg {
+  width: 12px;
+  height: 12px;
+}
+.scout-group-expand-hint {
+  margin-left: auto;
+  color: var(--s-text-3);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 /* ── List States ────────────────────────────────────────────── */
@@ -991,6 +1040,25 @@
   border-color: var(--s-border);
 }
 .scout-btn-secondary:hover { background: var(--s-surface-2); color: var(--s-text); }
+.scout-export-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 12px;
+  color: var(--s-text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scout-export-menu-item:hover {
+  background: var(--s-surface-2);
+  color: var(--s-text);
+}
+.scout-export-menu-item + .scout-export-menu-item {
+  border-top: 1px solid var(--s-border);
+}
 .scout-btn-danger {
   background: var(--s-error-dim);
   color: var(--s-error);
@@ -1178,39 +1246,99 @@
 .scout-snippet-actions { display: flex; gap: 6px; margin-top: 10px; }
 
 /* ── Toast Notification ─────────────────────────────────────── */
+/* Theme-aware, no garish left border. Status communicated through a small inline
+   icon chip on the left instead of a 3px stripe. Container sits outside the panel
+   (so it's never clipped) and mirrors the panel's theme class for light/dark. */
 #scout-toast-container {
   position: fixed;
-  bottom: 36px;
-  right: 16px;
+  bottom: 24px;
+  right: 24px;
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   pointer-events: none;
+  /* DARK MODE tokens (default) */
+  --tt-bg:              #1E2D42;
+  --tt-border:          rgba(255, 255, 255, 0.08);
+  --tt-text:            #F8FAFC;
+  --tt-shadow:          0 12px 32px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --tt-icon-bg-success: rgba(52, 211, 153, 0.14);
+  --tt-icon-success:    #34D399;
+  --tt-icon-bg-error:   rgba(248, 113, 113, 0.14);
+  --tt-icon-error:      #F87171;
+  --tt-icon-bg-warning: rgba(251, 191, 36, 0.14);
+  --tt-icon-warning:    #FBBF24;
+  --tt-icon-bg-info:    rgba(79, 142, 247, 0.14);
+  --tt-icon-info:       #4F8EF7;
+}
+#scout-toast-container.scout-light {
+  --tt-bg:              #FFFFFF;
+  --tt-border:          rgba(0, 0, 0, 0.08);
+  --tt-text:            #032D60;
+  --tt-shadow:          0 12px 32px rgba(2, 32, 86, 0.10), 0 2px 4px rgba(2, 32, 86, 0.04);
+  --tt-icon-bg-success: rgba(4, 132, 75, 0.10);
+  --tt-icon-success:    #04844B;
+  --tt-icon-bg-error:   rgba(194, 57, 52, 0.10);
+  --tt-icon-error:      #C23934;
+  --tt-icon-bg-warning: rgba(221, 122, 1, 0.10);
+  --tt-icon-warning:    #DD7A01;
+  --tt-icon-bg-info:    rgba(1, 118, 211, 0.10);
+  --tt-icon-info:       #0176D3;
 }
 .scout-toast {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: var(--s-surface-2);
-  border: 1px solid var(--s-border-mid);
-  border-radius: var(--s-radius);
-  color: var(--s-text);
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 16px 12px 13px;
+  background: var(--tt-bg);
+  border: 1px solid var(--tt-border);
+  border-radius: 12px;
+  color: var(--tt-text);
+  font-family: var(--s-font, 'Space Grotesk', 'DM Sans', system-ui, -apple-system, sans-serif);
   font-size: 13px;
-  font-family: var(--s-font);
-  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+  box-shadow: var(--tt-shadow);
   pointer-events: auto;
-  animation: scout-toast-in 0.2s ease;
-  max-width: 340px;
+  max-width: 360px;
+  min-width: 220px;
+  opacity: 0;
+  transform: translateX(20px) scale(0.97);
+  animation: scout-toast-in 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
-.scout-toast.success { border-left: 3px solid var(--s-success); }
-.scout-toast.error   { border-left: 3px solid var(--s-error); }
-.scout-toast.warning { border-left: 3px solid var(--s-warning); }
-.scout-toast.info    { border-left: 3px solid var(--s-accent); }
+.scout-toast.scout-toast-leaving {
+  opacity: 0;
+  transform: translateX(20px);
+}
+.scout-toast-icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  margin-top: 1px;
+}
+.scout-toast-icon svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.4;
+}
+.scout-toast.success .scout-toast-icon { background: var(--tt-icon-bg-success); color: var(--tt-icon-success); }
+.scout-toast.error   .scout-toast-icon { background: var(--tt-icon-bg-error);   color: var(--tt-icon-error); }
+.scout-toast.warning .scout-toast-icon { background: var(--tt-icon-bg-warning); color: var(--tt-icon-warning); }
+.scout-toast.info    .scout-toast-icon { background: var(--tt-icon-bg-info);    color: var(--tt-icon-info); }
+.scout-toast-msg {
+  flex: 1;
+  min-width: 0;
+  word-wrap: break-word;
+}
 @keyframes scout-toast-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateX(24px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
 }
 
 /* ── Loading States ─────────────────────────────────────────── */

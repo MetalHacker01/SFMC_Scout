@@ -50,26 +50,17 @@ async function fetchActivityDetail(instance, activityObjectId, endpointType, obj
     const timestamp = Date.now();
     const inst = instance || 'mc.s51';
 
-    // Primary: marketingcloudapps.com
-    const primaryUrl = `https://${inst}.marketingcloudapps.com/AutomationStudioFuel3/fuelapi/automation/v1/${endpointType}/${activityObjectId}/?view=categoryinfo&_=${timestamp}`;
+    // Cookie-only proxy on the main domain — no per-section CSRF token needed.
+    const primaryUrl = `https://${inst}.exacttarget.com/cloud/fuelapi/automation/v1/${endpointType}/${activityObjectId}/?view=categoryinfo&_=${timestamp}`;
 
-    let response = await fetch(primaryUrl, {
+    const response = await fetch(primaryUrl, {
         method: 'GET',
         credentials: 'include',
         headers: STANDARD_HEADERS
     });
 
     if (!response.ok) {
-        // Fallback: exacttarget.com
-        const fallbackUrl = `https://${inst}.exacttarget.com/AutomationStudioFuel3/fuelapi/automation/v1/${endpointType}/${activityObjectId}/?view=categoryinfo&_=${timestamp}`;
-        response = await fetch(fallbackUrl, {
-            method: 'GET',
-            credentials: 'include',
-            headers: STANDARD_HEADERS
-        });
-        if (!response.ok) {
-            throw new Error(`API ${response.status} for ${endpointType}/${activityObjectId}`);
-        }
+        throw new Error(`API ${response.status} for ${endpointType}/${activityObjectId}`);
     }
 
     const data = await response.json();
