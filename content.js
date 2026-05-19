@@ -19,6 +19,69 @@ const SCS = {
 };
 
 // ============================================================
+//  PEER EXTENSION COORDINATION (Scout <-> CloudPage Maestro)
+// ============================================================
+// Drop our marker on <html> immediately so a sibling extension (CloudPage
+// Maestro) can detect us even before the panel renders. We do the same
+// check in reverse to enter "compact toggle" mode when both are installed.
+try { document.documentElement.setAttribute('data-scout-loaded', '1'); } catch (_) {}
+
+const SCOUT_PEER = { detected: false, paused: false };
+
+function scoutDetectPeer() {
+    return document.documentElement.hasAttribute('data-cpm-loaded');
+}
+function scoutApplyDualMode() {
+    if (SCOUT_PEER.detected) return;
+    SCOUT_PEER.detected = true;
+    const tog = document.getElementById('scout-toggle');
+    if (tog) tog.classList.add('scout-compact');
+}
+function scoutPauseForPeer() {
+    if (SCOUT_PEER.paused) return;
+    SCOUT_PEER.paused = true;
+    // Mutual exclusion: close our panel if it's open
+    if (typeof S !== 'undefined' && S.open) {
+        S.open = false;
+        const panel = document.getElementById('scout-panel');
+        if (panel) panel.classList.remove('scout-open');
+        const tog = document.getElementById('scout-toggle');
+        if (tog) tog.classList.remove('panel-open');
+    }
+    const tog = document.getElementById('scout-toggle');
+    if (tog) tog.classList.add('peer-active');
+    console.log('[SFMC Scout] Paused while CloudPage Maestro is active');
+}
+function scoutResumeFromPeer() {
+    if (!SCOUT_PEER.paused) return;
+    SCOUT_PEER.paused = false;
+    const tog = document.getElementById('scout-toggle');
+    if (tog) tog.classList.remove('peer-active');
+    console.log('[SFMC Scout] Resumed (CPM panel closed)');
+}
+function scoutAnnouncePanelState(isOpen) {
+    try {
+        document.dispatchEvent(new CustomEvent(
+            isOpen ? 'sfmc-panel:open' : 'sfmc-panel:close',
+            { detail: { extension: 'scout' } }
+        ));
+    } catch (_) {}
+}
+function scoutSetupPeerCoordination() {
+    const check = () => { if (scoutDetectPeer()) scoutApplyDualMode(); };
+    setTimeout(check, 400);
+    setTimeout(check, 1500);
+    document.addEventListener('sfmc-panel:open', (e) => {
+        if (e?.detail?.extension === 'scout') return;
+        scoutPauseForPeer();
+    });
+    document.addEventListener('sfmc-panel:close', (e) => {
+        if (e?.detail?.extension === 'scout') return;
+        scoutResumeFromPeer();
+    });
+}
+
+// ============================================================
 //  STACK / INSTANCE
 // ============================================================
 function getStack() {
@@ -4128,6 +4191,9 @@ function createPanel() {
     toggle.addEventListener('click', togglePanel);
     document.body.appendChild(toggle);
 
+    // Wire dual-extension coordination (compact mode + mutual exclusion + pause)
+    scoutSetupPeerCoordination();
+
     // Header events
     document.getElementById('scout-close-btn')?.addEventListener('click', togglePanel);
     document.getElementById('scout-theme-btn')?.addEventListener('click', () => {
@@ -4197,6 +4263,14 @@ function togglePanel() {
         tog.classList.toggle('panel-open', S.open);
         document.documentElement.style.setProperty('--scout-panel-w', panel.offsetWidth + 'px');
     }
+
+    // Notify CloudPage Maestro (if installed) so it can close + pause.
+    scoutAnnouncePanelState(S.open);
+    if (S.open && SCOUT_PEER.paused) {
+        // Opened despite being paused — peer must be closing concurrently
+        scoutResumeFromPeer();
+    }
+
     if (S.open) {
         loadTokens(() => {
             renderCurrentView();
