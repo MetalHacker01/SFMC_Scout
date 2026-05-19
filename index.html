@@ -639,7 +639,8 @@
          letter-spacing: -0.01em;
       }
 
-      .feature-card h4 i {
+      .feature-card h4 i,
+      .feature-card h4 svg {
          color: var(--accent);
          font-size: var(--fs-18);
       }
@@ -829,7 +830,7 @@
                   <p>Search across DEs, Automations, Journeys, Emails, Assets, and Activities simultaneously — streaming results in real-time.</p>
                </div>
                <div class="feature-card">
-                  <h4><i class="iconoir-play-outline"></i> Automation Inspector</h4>
+                  <h4><svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><path d="M6.906 4.537A.6.6 0 006 5.053v13.894a.6.6 0 00.906.516l12.575-6.844a.6.6 0 000-1.032L6.906 4.537z"/></svg> Automation Inspector</h4>
                   <p>Browse automations with status badges. Click any automation to view its full step breakdown with syntax-highlighted SQL and SSJS.</p>
                </div>
                <div class="feature-card">
@@ -1000,14 +1001,14 @@ sequenceDiagram
    participant User
    participant Panel as Scout Panel
    participant BG as background.js
-   participant Proxy as mc.{stack}.exacttarget.com/cloud/fuelapi
+   participant Proxy as Cookie-only Proxy
 
-   User->>Panel: Search "M1_Test"
-   Panel->>BG: MAKE_REQUEST { url, method, headers }
-   BG->>Proxy: fetch(url, { credentials: 'include' })
+   User->>Panel: Search M1_Test
+   Panel->>BG: MAKE_REQUEST url method headers
+   BG->>Proxy: fetch with credentials include
    Note over BG,Proxy: Browser attaches SFMC session cookies automatically
-   Proxy-->>BG: JSON (200 OK)
-   BG-->>Panel: sendResponse({ results })
+   Proxy-->>BG: JSON 200 OK
+   BG-->>Panel: sendResponse results
    Panel->>Panel: Render results
             </div>
 
@@ -1725,7 +1726,7 @@ graph TD
                <li><i class="iconoir-check-circle" style="color: var(--success);"></i> Chrome 100+ (primary supported browser)</li>
                <li><i class="iconoir-check-circle" style="color: var(--success);"></i> Edge 100+ (Chromium-based)</li>
                <li><i class="iconoir-warning-triangle" style="color: var(--warning);"></i> Firefox (MV3 support incomplete — not recommended)</li>
-               <li><i class="iconoir-cancel" style="color: var(--danger);"></i> Safari (MV3 extension API not supported)</li>
+               <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><path d="M6.758 17.243L12.001 12M17.244 6.757L12.001 12M12.001 12L6.758 6.757M12.001 12L17.244 17.243"/></svg> Safari (MV3 extension API not supported)</li>
             </ul>
 
             <div class="callout callout-success">
@@ -1777,21 +1778,28 @@ graph TD
 
       function applyMermaid(initial) {
          const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+         // Always startOnLoad: false + explicit mermaid.run(). The initial
+         // call happens AFTER DOMContentLoaded (this script tag is at the
+         // end of body), so `startOnLoad: true` would be a silent no-op.
          mermaid.initialize({
-            startOnLoad: initial,
+            startOnLoad: false,
             theme: 'base',
             securityLevel: 'loose',
             themeVariables: mermaidThemeFor(isDark),
             flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
          });
-         if (!initial) {
-            document.querySelectorAll('.mermaid').forEach(n => {
-               if (n.dataset.originalCode) n.innerHTML = n.dataset.originalCode;
-               else n.dataset.originalCode = n.innerHTML;
+         // On theme toggle we need to reset the rendered SVGs back to source
+         // so mermaid.run can re-process them with the new theme.
+         document.querySelectorAll('.mermaid').forEach(n => {
+            if (!n.dataset.originalCode) {
+               n.dataset.originalCode = n.textContent;
+            }
+            if (!initial) {
+               n.innerHTML = n.dataset.originalCode;
                n.removeAttribute('data-processed');
-            });
-            mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
-         }
+            }
+         });
+         mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
       }
 
       function toggleTheme() {

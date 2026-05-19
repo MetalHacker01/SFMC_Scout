@@ -4,6 +4,39 @@ A chronological log of bugs and their working fixes. **Read this before touching
 
 ---
 
+## 2026-05-19 — Public-facing polish: README ghost-tabs link, Mermaid timing, missing icons, license clarity
+
+**Problems:**
+1. **README link to `GHOST_TABS_FIX.md` 404'd from GitHub Pages.** It pointed to a sibling-repo path (`../CloudPages_Maestro/Chrome_Extension_CPM/GHOST_TABS_FIX.md`) that doesn't exist when the README is rendered standalone from the SFMC Scout repo.
+2. **Every mermaid diagram in `index.html` rendered as "Syntax error in text".** The `applyMermaid(true)` call set `startOnLoad: true` and exited without explicitly calling `mermaid.run()`. But the script block runs AT THE END of `<body>` — DOMContentLoaded has already fired by the time `mermaid.initialize` is called, so `startOnLoad: true` is a silent no-op. Result: mermaid never processed the diagrams at first paint.
+3. **Two iconoir classes rendered as colored squares** instead of icons — `iconoir-play-outline` (Automation Inspector feature card) and `iconoir-cancel` (Safari compatibility bullet). The CDN's class catalog shifts over time; both class names appear to have been renamed in the live `iconoir@main` build.
+4. **License contradiction in README footer** — README said "Redistribution without permission is not permitted" but the LICENSE file is MIT (which explicitly grants redistribution). User wanted fully open source WITH attribution.
+
+**Fix:**
+1. `README.md` — replaced the `GHOST_TABS_FIX.md` link with an inline two-paragraph description of the migration (why ghost tabs felt virus-like, how `mc.{stack}.exacttarget.com/cloud/fuelapi/...` cookie-only proxy replaced them, where CSRF tokens still come from).
+2. `index.html applyMermaid()` — always uses `startOnLoad: false` and explicitly calls `mermaid.run({ nodes })`. Initial render path now: cache `originalCode` from `textContent` on first visit, call `mermaid.run()`. Theme-toggle path: restore from `originalCode` + drop `data-processed` + `mermaid.run()`.
+3. `index.html` — replaced `<i class="iconoir-play-outline">` and `<i class="iconoir-cancel">` with inline SVGs that don't depend on the CDN's class catalog. Same Iconoir geometry, no external lookup.
+4. `README.md` License section — rewritten as "License & Attribution":
+   - Confirmed MIT (open source, free to fork/modify/redistribute commercial settings).
+   - Three concrete attribution expectations: (a) keep the `LICENSE` file + copyright notice intact; (b) credit the original author somewhere visible (README mention, About page, link back); (c) a quick LinkedIn tag or release-note mention on derivative tools is appreciated.
+   - Worked examples of attribution lines users can copy.
+   - Removed the "Redistribution without permission is not permitted" line which directly contradicted MIT.
+
+**Re: licensing choice** — kept **MIT** rather than switching to CC BY 4.0 or Apache 2.0:
+- MIT already requires retention of the copyright + license text in any copy or substantial portion — that's legally enforceable attribution.
+- It's the most universally understood OSS license; reduces friction for forkers and contributors.
+- Stronger attribution expectations (visible credit in About pages) belong in README convention, not the license file — keeps the license simple and standard.
+
+**Verified by:** TBD — user testing on GitHub Pages required.
+
+**Never regress to:**
+- **Linking `../CloudPages_Maestro/...` paths from this repo's README.** GitHub renders relative paths inside the repo only; sibling-repo references 404. Inline the relevant content or link to the sibling repo's actual GitHub URL.
+- **`mermaid.initialize({ startOnLoad: true })` from inline scripts at the end of `<body>`.** DOMContentLoaded has fired by then; the auto-load hook is a no-op. Always pair with an explicit `mermaid.run()` call.
+- **Reliance on the live `iconoir@main` class catalog without a fallback.** When an icon class fails, drop the inline SVG using Iconoir's published path geometry — same visual, no CDN dependency drift.
+- **License/README mismatch.** If the LICENSE file says MIT but the README footer says "no redistribution", users distrust both. Pick one stance and reconcile them.
+
+---
+
 ## 2026-05-19 — Automation folder: replicate the detail view's exact two-call hydration (with numeric id from the legacy listing)
 
 **Problem:** Previous fix tried to resolve automation folder paths via a single bulk folder-tree fetch using `categoryId`. Result: only top-level folders like "my automations" rendered — anything deeper showed "—". The folder-tree response apparently doesn't include enough parent-chain data, OR `categoryId` from v1 doesn't match the folder ids in that response.

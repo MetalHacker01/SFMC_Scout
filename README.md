@@ -107,7 +107,9 @@ SFMC Scout authenticates against `mc.{stack}.exacttarget.com/cloud/fuelapi/...` 
 For the few endpoints that still require a CSRF token (POST creates, PATCH updates, contact-search), the extension passively captures `x-csrf-token` headers from SFMC's own outgoing requests via `webRequest.onBeforeSendHeaders`. **No ghost tabs are opened** — the capture is silent and only fires for headers SFMC itself was already sending. No credentials are stored externally.
 
 #### Migration from ghost tabs (v2.1)
-Prior versions opened a minimized background window with up to four hidden SFMC tabs on first load to force token-bearing requests. v2.1 dropped this entirely after discovering the `/cloud/fuelapi/` cookie-only proxy. See [GHOST_TABS_FIX.md](../CloudPages_Maestro/Chrome_Extension_CPM/GHOST_TABS_FIX.md) (sibling project doc) for the full migration playbook.
+Prior versions opened a minimized background window with up to four hidden SFMC tabs on first load — each tab navigated to a different module (Content Builder, Automation Studio, Journey Builder, CloudPages) to force SFMC to issue token-bearing requests that Scout could intercept. That setup felt heavy-handed (users described it as "virus-like") and triggered intermittent token-staleness errors.
+
+v2.1 dropped the ghost tabs entirely after discovering that `mc.{stack}.exacttarget.com/cloud/fuelapi/...` — an internal SFMC proxy used by its own SPA — accepts the user's session cookies for read APIs with no CSRF token required. Every browse, search, and read path migrated to that proxy; CSRF tokens are now only captured passively (via `webRequest.onBeforeSendHeaders` on SFMC's own outgoing requests) for the few endpoints that still demand them. No tabs are opened. No requests are issued by Scout solely to obtain tokens.
 
 ### Search performance caps
 Every search type is capped at the top **40 matches** by relevance. With production orgs holding 10k+ assets / 5k+ automations, an uncapped query like `"test"` would overload the server (SFMC's search engine returned `System.OutOfMemoryException` on the wide multi-predicate query). The cap is intentional: the search bar surfaces the closest matches; the dedicated tabs (DE Tools, Automations, Reports) provide full paginated browsing for exhaustive use cases.
@@ -184,8 +186,18 @@ Built by **Aldorino Rrushi**, MarTech Solution Engineer
 
 ---
 
-## License
+## License & Attribution
 
-© 2026 Aldorino Rrushi. All rights reserved.
+SFMC Scout is open source under the **MIT License** — you are free to use, copy, modify, fork, and redistribute it, including in commercial settings.
 
-This software is provided for internal use. Redistribution without permission is not permitted.
+The MIT License requires that **the copyright notice and license text remain in any copy or substantial portion of the software**. If you build a fork, derivative tool, or reuse meaningful parts of this code, please:
+
+1. Keep the [LICENSE](LICENSE) file and the `Copyright (c) 2026 Aldorino Rrushi` notice intact in your fork.
+2. Credit the original author somewhere visible — a README mention, an About page, or a link back to this repository works. Examples:
+   - "Based on / forked from [SFMC Scout](https://github.com/MetalHacker01/SFMC_Scout) by Aldorino Rrushi."
+   - In a tool's About modal: "Original by Aldorino Rrushi — [SFMC Scout](https://github.com/MetalHacker01/SFMC_Scout)."
+3. If you publish a derivative tool, a quick mention / tag on LinkedIn or in your release notes is appreciated — not legally required, but it's how open source stays human.
+
+Full license text: see [LICENSE](LICENSE).
+
+© 2026 Aldorino Rrushi.
