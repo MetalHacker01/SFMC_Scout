@@ -73,6 +73,7 @@ const I = {
     query: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2"/><path d="M16 2H20V6"/><path d="M10 14L20 4"/></svg>',
     eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 12 5.5 5 12 5C18.5 5 22 12 22 12C22 12 18.5 19 12 19C5.5 19 2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
     image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15L16 10L5 21"/></svg>',
+    clock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 7V12L15 14"/></svg>',
     chevLeft: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6L9 12L15 18"/></svg>',
     reports: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H15M9 13H15M9 9H11"/><path d="M5 3H14.5L19 7.5V21H5V3Z"/><path d="M14 3V8H19"/></svg>',
     deTable: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19C3 20.66 7.03 22 12 22C16.97 22 21 20.66 21 19V5"/><path d="M3 12C3 13.66 7.03 15 12 15C16.97 15 21 13.66 21 12"/></svg>',
@@ -591,6 +592,157 @@ function fetchJourneyEventDef(eventDefinitionId, instance) {
     });
 }
 
+// Audit-log fetcher + cache. The endpoint returns the full lifecycle of
+// edits (Create / Modify / Publish) — used to populate the timeline modal
+// reachable from the journey detail card's "Audit Log" link.
+const _journeyAuditCache = new Map(); // interactionId → audit response
+
+function fetchJourneyAuditLog(interactionId, instance) {
+    if (!interactionId) return Promise.resolve(null);
+    if (_journeyAuditCache.has(interactionId)) {
+        return Promise.resolve(_journeyAuditCache.get(interactionId));
+    }
+    return new Promise(resolve => {
+        try {
+            chrome.runtime.sendMessage(
+                { action: 'fetchJourneyAuditLog', interactionId, instance },
+                (resp) => {
+                    if (chrome.runtime.lastError) { resolve(null); return; }
+                    if (resp && resp.success && resp.data) {
+                        _journeyAuditCache.set(interactionId, resp.data);
+                        resolve(resp.data);
+                    } else { resolve(null); }
+                }
+            );
+        } catch (_) { resolve(null); }
+    });
+}
+
+// Build a humanized timestamp like "May 19, 2026 · 10:31 AM" from an ISO
+// string. Used in the audit timeline.
+function formatAuditTime(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        const date = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        return `${date} · ${time}`;
+    } catch (_) { return iso; }
+}
+
+// Pops a modal with a chronological timeline of audit entries. Uses the same
+// `.scout-preview-overlay` / `.scout-preview-modal` shell as the asset
+// preview modal — backdrop blur, scale-in, Esc + click-outside to close.
+function showJourneyAuditModal(interactionId, journeyName) {
+    if (document.querySelector('.scout-preview-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'scout-preview-overlay';
+    _mirrorPanelTheme(overlay);
+    overlay.innerHTML = `
+        <div class="scout-preview-modal scout-audit-modal">
+            <div class="scout-preview-head">
+                <div class="scout-preview-title">${I.clock} ${escHtml(journeyName || 'Audit Log')}</div>
+                <button class="scout-preview-close" aria-label="Close">${I.close}</button>
+            </div>
+            <div class="scout-preview-body scout-audit-body" id="scout-audit-body">
+                <div class="scout-preview-loading">${I.spinner}<span>Loading audit log…</span></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => {
+        overlay.classList.add('scout-preview-out');
+        setTimeout(() => overlay.remove(), 150);
+        document.removeEventListener('keydown', onKey);
+    };
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    overlay.querySelector('.scout-preview-close').addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKey);
+
+    fetchJourneyAuditLog(interactionId, getCurrentInstance()).then(data => {
+        const body = document.getElementById('scout-audit-body');
+        if (!body) return;
+        const items = (data && Array.isArray(data.items)) ? data.items : [];
+        if (!items.length) {
+            body.innerHTML = `<div class="scout-preview-error">No audit log entries found.</div>`;
+            return;
+        }
+        body.innerHTML = renderJourneyAuditTimeline(items);
+    });
+}
+
+// Color-coded by action. SFMC's documented audit-log action enum is exactly
+// these five values (lowercase in the query param, capitalized in responses):
+//   create, modify, publish, unpublish, delete
+// The endpoint blurb mentions "activation, deactivation, stopping, and
+// deletion" conceptually but does NOT expose those as distinct actions —
+// publish/unpublish + the journey's runtime status field are the only signals.
+function renderJourneyAuditTimeline(items) {
+    // Items already arrive newest-first from the API. Keep that order.
+    const ACTION_COLOR = {
+        'Create':    '#0176d3', // accent blue — initial creation
+        'Modify':    '#64748b', // neutral slate — definition edits
+        'Publish':   '#04844b', // success green (overridden to red on Failed)
+        'Unpublish': '#b06f00', // amber — definition pulled from runtime
+        'Delete':    '#c23934'  // danger red — journey removed
+    };
+    // Aggregate summary at the top: total events + counts by action +
+    // unique editors. Gives the user a quick read before they scroll.
+    const counts = {};
+    const users = new Set();
+    for (const it of items) {
+        const a = it.action || 'Other';
+        counts[a] = (counts[a] || 0) + 1;
+        if (it.user && it.user.name) users.add(it.user.name);
+    }
+    const summaryPills = Object.entries(counts).map(([action, n]) => {
+        const c = ACTION_COLOR[action] || '#64748b';
+        return `<span class="scout-audit-pill" style="background:color-mix(in oklab, ${c} 15%, transparent); color:${c}; border:1px solid color-mix(in oklab, ${c} 35%, transparent)">${n} ${escHtml(action)}</span>`;
+    }).join('');
+    const summary = `<div class="scout-audit-summary">
+        <div class="scout-audit-summary-row">${summaryPills}</div>
+        <div class="scout-audit-summary-meta">${items.length} event${items.length === 1 ? '' : 's'} · ${users.size} editor${users.size === 1 ? '' : 's'}</div>
+    </div>`;
+
+    const rows = items.map(it => {
+        const action = it.action || 'Other';
+        const c = ACTION_COLOR[action] || '#64748b';
+        const user = (it.user && it.user.name) || '—';
+        const when = formatAuditTime(it.timeStamp);
+        const ver = it.versionNumber ? `v${it.versionNumber}` : '';
+        // Publish events carry an extra status (PublishCompleted, PublishFailed)
+        // — render as a sub-pill so the user sees succeeded vs failed at a glance.
+        const isFailed = it.publishStatus && /fail|error/i.test(it.publishStatus);
+        const statusColor = isFailed ? '#c23934' : c;
+        const statusPill = it.publishStatus
+            ? `<span class="scout-audit-status" style="color:${statusColor}; border-color:${statusColor}">${escHtml(it.publishStatus)}</span>`
+            : '';
+        return `<div class="scout-audit-item">
+            <div class="scout-audit-dot" style="background:${c}"></div>
+            <div class="scout-audit-body-cell">
+                <div class="scout-audit-line1">
+                    <span class="scout-audit-action" style="color:${c}">${escHtml(action)}</span>
+                    ${ver ? `<span class="scout-audit-ver">${ver}</span>` : ''}
+                    ${statusPill}
+                </div>
+                <div class="scout-audit-line2">
+                    <span class="scout-audit-user">${escHtml(user)}</span>
+                    <span class="scout-audit-when">${escHtml(when)}</span>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    return `${summary}<div class="scout-audit-timeline">${rows}</div>
+        <div class="scout-audit-note">
+            SFMC's audit log has no <code>activate</code> action. The most recent <code>Modify</code> or <code>Publish</code> is usually the activator — once a journey is activated its current version is locked from edits.
+        </div>`;
+}
+
 function fetchJourneyInteractionDetail(interactionId, versionNumber, instance) {
     if (!interactionId) return Promise.resolve(null);
     const cacheKey = `${interactionId}::${versionNumber || 1}`;
@@ -775,14 +927,17 @@ function renderJourneyDetail(j, state) {
 
         inner = `${statStrip}${rows.length ? `<div class="scout-jdetail-rows">${rows.join('')}</div>` : ''}`;
     }
-    // Header bar: title + "Open in JB" external link
+    // Header bar: title + "Audit Log" + "Open in JB" links
+    const auditBtn = j.id
+        ? `<button class="scout-jdetail-open" data-audit-id="${escHtml(j.id)}" data-audit-name="${escHtml(j.name || '')}" title="View audit log">${I.clock || '⌚'} Audit Log</button>`
+        : '';
     const openBtn = j.url
         ? `<button class="scout-jdetail-open" data-jb-url="${escHtml(j.url)}" title="Open in Journey Builder">${I.linkExt || '↗'} Open in JB</button>`
         : '';
     return `<div class="scout-journey-detail" data-jid="${escHtml(j.id)}">
         <div class="scout-jdetail-head">
             <span class="scout-jdetail-headlabel">Journey Details</span>
-            ${openBtn}
+            <div class="scout-jdetail-head-actions">${auditBtn}${openBtn}</div>
         </div>
         ${inner || '<div class="scout-jdetail-row scout-jdetail-empty">No additional details.</div>'}
     </div>`;
@@ -1029,6 +1184,19 @@ function renderAssetDetail(item) {
     </div>`;
 }
 
+// Mirror the panel's theme class onto a body-level overlay (modal lives
+// outside #scout-panel, so the --s-* CSS vars otherwise resolve to the
+// :root dark defaults regardless of panel theme). Same fix the toast
+// container uses.
+function _mirrorPanelTheme(overlay) {
+    try {
+        const panel = document.getElementById('scout-panel');
+        if (panel && panel.classList.contains('scout-light')) {
+            overlay.classList.add('scout-light');
+        }
+    } catch (_) {}
+}
+
 // Pops a modal with the rendered-HTML thumbnail. Click outside or Escape closes.
 function showAssetPreviewModal(assetId, assetName, assetTypeName) {
     // De-dupe in case of double-click
@@ -1036,6 +1204,7 @@ function showAssetPreviewModal(assetId, assetName, assetTypeName) {
 
     const overlay = document.createElement('div');
     overlay.className = 'scout-preview-overlay';
+    _mirrorPanelTheme(overlay);
     overlay.innerHTML = `
         <div class="scout-preview-modal">
             <div class="scout-preview-head">
@@ -1327,13 +1496,19 @@ function bindSearchRowEvents(cont) {
             }
         });
     });
-    // ── Journey detail interactions (Open in JB, copy key, open automation) ──
+    // ── Journey detail interactions (Open in JB, Audit Log, mono copy) ──
     cont.querySelectorAll('.scout-journey-detail').forEach(card => {
-        const open = card.querySelector('.scout-jdetail-open');
-        if (open) open.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const u = open.dataset.jbUrl;
-            if (u) window.open(u, '_blank');
+        // Card-header buttons share `.scout-jdetail-open` styling. Dispatch
+        // on dataset attribute to tell them apart.
+        card.querySelectorAll('.scout-jdetail-open').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (btn.dataset.jbUrl) {
+                    window.open(btn.dataset.jbUrl, '_blank');
+                } else if (btn.dataset.auditId) {
+                    showJourneyAuditModal(btn.dataset.auditId, btn.dataset.auditName);
+                }
+            });
         });
         card.querySelectorAll('[data-copy]').forEach(el => {
             el.addEventListener('click', (e) => {
@@ -2401,7 +2576,7 @@ function renderDEDetail(container) {
                     ${hasDetails ? `<span class="scout-usage-nav-arrow" id="scout-qarrow-${qi}">${I.chevDown}</span>` : ''}
                 </button>
                 ${hasDetails ? `<div class="scout-query-detail" id="scout-qdetail-${qi}" style="display:none;">
-                    ${sql ? `<pre class="scout-query-sql">${escHtml(sql.length > 400 ? sql.slice(0, 400) + '…' : sql)}</pre>` : ''}
+                    ${sql ? `<pre class="scout-query-sql">${escHtml(sql)}</pre>` : ''}
                 </div>` : ''}`;
             }).join('');
         }
@@ -2521,11 +2696,18 @@ function renderDEDetail(container) {
         });
         // Journey detail card interactions inside the usage panel
         div.querySelectorAll('.scout-journey-detail').forEach(card => {
-            const open = card.querySelector('.scout-jdetail-open');
-            if (open) open.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const u = open.dataset.jbUrl;
-                if (u) window.open(u, '_blank');
+            // Both "Open in JB" + "Audit Log" share the same button class —
+            // discriminate by dataset attribute. Mirrors the binder used on
+            // the main search journey cards.
+            card.querySelectorAll('.scout-jdetail-open').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (btn.dataset.jbUrl) {
+                        window.open(btn.dataset.jbUrl, '_blank');
+                    } else if (btn.dataset.auditId) {
+                        showJourneyAuditModal(btn.dataset.auditId, btn.dataset.auditName);
+                    }
+                });
             });
             card.querySelectorAll('[data-copy]').forEach(el => {
                 el.addEventListener('click', (e) => {
@@ -3116,21 +3298,57 @@ async function generateAutomationsReport(statusEl) {
                                 : null;
                     if (procs) a._stepCount = procs.length;
                 }
-                // Folder path — exact same parse logic the detail view uses.
-                if (!a._folderPath && leg) {
+                // Created / Modified date+by — mirror the in-panel automation
+                // detail view's field priority (content.js openAutomationDetail).
+                // v1 carries createdBy / createdDate / modifiedDate; legacy bulk
+                // carries lastSavedBy / lastSaveDate which often have the most
+                // recent edit metadata. Try v1 first, fall back to legacy.
+                if (v1) {
+                    if (!a._createdBy) {
+                        const cb = resolveUser(v1.createdBy);
+                        if (cb) a._createdBy = cb;
+                    }
+                    if (!a._modifiedBy) {
+                        const mb = resolveUser(v1.modifiedBy || v1.lastSavedBy || v1.lastModifiedBy);
+                        if (mb) a._modifiedBy = mb;
+                    }
+                    if (!a.createdDate)  a.createdDate  = v1.createdDate || v1.createDate || a.createdDate;
+                    if (!a.modifiedDate) a.modifiedDate = v1.modifiedDate || v1.lastSaveDate || a.modifiedDate;
+                }
+                if (leg) {
                     const def = leg.definition || leg.automation || (Array.isArray(leg.items) ? leg.items[0] : null) || leg;
-                    const fp = def && (def.folderPath || def.categoryPath);
-                    if (fp) a._folderPath = String(fp);
+                    if (def) {
+                        // Folder path
+                        if (!a._folderPath) {
+                            const fp = def.folderPath || def.categoryPath;
+                            if (fp) a._folderPath = String(fp);
+                        }
+                        // Created / Modified by from legacy bulk
+                        if (!a._createdBy) {
+                            const cb = resolveUser(def.createdBy);
+                            if (cb) a._createdBy = cb;
+                        }
+                        if (!a._modifiedBy) {
+                            const mb = resolveUser(def.lastSavedBy || def.modifiedBy || def.lastModifiedBy);
+                            if (mb) a._modifiedBy = mb;
+                        }
+                        if (!a.createdDate)  a.createdDate  = def.createdDate || def.createDate || a.createdDate;
+                        if (!a.modifiedDate) a.modifiedDate = def.lastSaveDate || def.lastModifiedDate || def.modifiedDate || a.modifiedDate;
+                    }
                 }
             }));
         }
+        // Columns reordered so Created+Created By and Modified+Modified By
+        // sit next to each other (was: Created By alone, then dates at the
+        // end — confusing). Added Modified By to match the in-panel detail
+        // viewer's overview shape.
         const cols = [
             { idx:0, label:'Name' }, { idx:1, label:'Status' },
             { idx:2, label:'Key', align:'mono' }, { idx:3, label:'Last Run' },
             { idx:4, label:'Schedule' }, { idx:5, label:'Steps', align:'right' },
-            { idx:6, label:'Folder' }, { idx:7, label:'Created By' },
-            { idx:8, label:'Description' },
-            { idx:9, label:'Created' }, { idx:10, label:'Modified' }
+            { idx:6, label:'Folder' }, { idx:7, label:'Description' },
+            { idx:8, label:'Created By' }, { idx:9, label:'Created' },
+            { idx:10, label:'Modified By' }, { idx:11, label:'Modified' }
         ];
         const rows = allAutos.map(a => {
             return `<tr>
@@ -3141,25 +3359,27 @@ async function generateAutomationsReport(statusEl) {
 <td>${escHtml(a._scheduleTypeName||'')}</td>
 <td style="text-align:right">${a._stepCount !== '' && a._stepCount != null ? a._stepCount : '—'}</td>
 <td style="max-width:200px" title="${escHtml(a._folderPath||'')}">${escHtml(a._folderPath||'—')}</td>
-<td>${escHtml(a._createdBy||'')}</td>
 <td style="max-width:180px">${escHtml((a.description||'').substring(0,80))}</td>
-<td>${escHtml(formatDate(a.createdDate||a.createDate||''))}</td>
-<td>${escHtml(formatDate(a.modifiedDate||a.lastSaveDate||''))}</td>
+<td>${escHtml(a._createdBy||'—')}</td>
+<td>${escHtml(formatDate(a.createdDate||a.createDate||'')) || '—'}</td>
+<td>${escHtml(a._modifiedBy||'—')}</td>
+<td>${escHtml(formatDate(a.modifiedDate||a.lastSaveDate||'')) || '—'}</td>
 </tr>`;
         }).join('');
         const csvData = {
-            headers: ['Name', 'Status', 'Key', 'Last Run', 'Schedule', 'Steps', 'Folder', 'Created By', 'Description', 'Created', 'Modified', 'ID'],
+            headers: ['Name', 'Status', 'Key', 'Last Run', 'Schedule', 'Steps', 'Folder', 'Description', 'Created By', 'Created', 'Modified By', 'Modified', 'ID'],
             rows: allAutos.map(a => [
                 a.name || '', a.status || a.statusName || '',
                 a.key || a.automationKey || '', a.lastRunTime || a.lastRun || '',
                 a._scheduleTypeName || '', a._stepCount != null ? a._stepCount : '',
-                a._folderPath || '', a._createdBy || '',
-                a.description || '', a.createdDate || a.createDate || '',
-                a.modifiedDate || a.lastSaveDate || '', a.id || ''
+                a._folderPath || '', a.description || '',
+                a._createdBy || '', a.createdDate || a.createDate || '',
+                a._modifiedBy || '', a.modifiedDate || a.lastSaveDate || '',
+                a.id || ''
             ])
         };
         const logoUrl = await getLogoDataUrl();
-        const html = reportHtmlShell('Automations Report', allAutos.length, instance, rows || '<tr><td colspan="11" style="text-align:center;padding:30px;color:#64748B;">No automations found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
+        const html = reportHtmlShell('Automations Report', allAutos.length, instance, rows || '<tr><td colspan="12" style="text-align:center;padding:30px;color:#64748B;">No automations found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
         openBlobReport(html);
         if (statusEl) statusEl.innerHTML = `<span class="scout-status-success">${I.check} ${allAutos.length} automations exported.</span>`;
     } catch (e) {

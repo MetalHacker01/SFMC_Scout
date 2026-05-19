@@ -879,6 +879,27 @@
   padding: 24px;
   animation: scoutPreviewIn 160ms ease-out;
 }
+/* Light-mode mirror — the modal lives outside #scout-panel, so the
+ * panel's `.scout-light` class never reaches it. Mirroring the class on
+ * the overlay re-scopes every --s-* CSS var on the modal subtree. */
+.scout-preview-overlay.scout-light {
+  background: rgba(15, 23, 42, 0.42);
+  --s-bg:           #F3F2F2;
+  --s-bg-2:         #E8E7E6;
+  --s-surface:      #FFFFFF;
+  --s-surface-2:    #F9F8F7;
+  --s-border:       rgba(0,0,0,0.1);
+  --s-border-mid:   rgba(0,0,0,0.15);
+  --s-text:         #032D60;
+  --s-text-2:       #3E3E3C;
+  --s-text-3:       #706E6B;
+  --s-accent:       #0176D3;
+  --s-accent-h:     #014486;
+  --s-accent-dim:   rgba(1,118,211,0.12);
+  --s-success:      #04844B;
+  --s-error:        #C23934;
+  --s-warning:      #DD7A01;
+}
 .scout-preview-overlay.scout-preview-out {
   animation: scoutPreviewOut 140ms ease-in forwards;
 }
@@ -976,6 +997,171 @@
   font-size: 12px;
   text-align: center;
   padding: 24px;
+}
+
+/* ─── Journey audit-log modal ───────────────────────────────────────────── */
+/* Reuses .scout-preview-overlay + .scout-preview-modal as the shell.
+ * Differs from the image preview by displaying a left-aligned scrollable
+ * timeline instead of a centered image. */
+
+.scout-audit-modal { width: min(92vw, 560px); }
+.scout-audit-modal .scout-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.scout-audit-modal .scout-preview-title svg {
+  color: var(--s-accent);
+  flex-shrink: 0;
+}
+.scout-audit-body {
+  display: block !important;
+  padding: 0 !important;
+  background: var(--s-surface, var(--s-bg)) !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+}
+
+/* Summary strip at the top — counts by action + total events / editors */
+.scout-audit-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--s-border);
+  background: var(--s-bg-2);
+}
+.scout-audit-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.scout-audit-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.scout-audit-summary-meta {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--s-text-3);
+  white-space: nowrap;
+}
+
+/* Vertical timeline — left dot column, content column */
+.scout-audit-timeline {
+  position: relative;
+  padding: 6px 14px 0;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.scout-audit-timeline::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  left: 22px;
+  width: 1px;
+  background: var(--s-border);
+}
+.scout-audit-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  padding: 8px 0;
+  position: relative;
+}
+.scout-audit-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 4px;
+  margin-left: 3px;
+  box-shadow: 0 0 0 3px var(--s-surface, var(--s-bg));
+  z-index: 1;
+}
+.scout-audit-body-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.scout-audit-line1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scout-audit-action {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.scout-audit-ver {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--s-text-3);
+  background: var(--s-bg-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.scout-audit-status {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+  border-radius: 9px;
+}
+.scout-audit-line2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--s-text-2);
+}
+.scout-audit-user { font-weight: 500; }
+.scout-audit-when { color: var(--s-text-3); font-size: 11px; }
+
+.scout-audit-note {
+  padding: 10px 14px;
+  border-top: 1px solid var(--s-border);
+  background: var(--s-bg-2);
+  font-size: 11px;
+  color: var(--s-text-3);
+  line-height: 1.5;
+}
+.scout-audit-note strong { color: var(--s-text-2); font-weight: 600; }
+.scout-audit-note code {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 10px;
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--s-text-2);
+}
+
+/* Card header now hosts two buttons (Audit + Open in JB) instead of one */
+.scout-jdetail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* Loading / error states */
@@ -1519,8 +1705,19 @@
   background: #0A1628;
   border-top: 1px solid var(--s-border);
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  /* Long queries: cap height, scroll inside the container instead of
+   * truncating with "…". User can read the entire SQL without leaving the
+   * panel; the scroll bar makes the length obvious. */
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  line-height: 1.5;
 }
+.scout-query-sql::-webkit-scrollbar { width: 6px; height: 6px; }
+.scout-query-sql::-webkit-scrollbar-track { background: transparent; }
+.scout-query-sql::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+.scout-query-sql::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.32); }
 
 /* ── Buttons ────────────────────────────────────────────────── */
 .scout-btn {

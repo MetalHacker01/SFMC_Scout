@@ -1456,6 +1456,7 @@ graph TD
                   <tr><td>Entry Source</td><td>Trigger type chip + Data Extension name resolved from the event definition</td></tr>
                   <tr><td>Entry Criteria</td><td><code>metaData.criteriaDescription</code> rendered as a wrapping code block — supports long AND/OR filter expressions</td></tr>
                   <tr><td>Schedule</td><td>Humanized from <code>schedule</code> object — "Hourly", "Every 2 days · 53 occurrences", "One-Time Schedule · Run On: 8/15/2025 10:30 AM IST", "No Schedule"</td></tr>
+                  <tr><td>Audit Log</td><td>Top-right button — opens a timeline modal of every <code>Create</code> / <code>Modify</code> / <code>Publish</code> / <code>Unpublish</code> / <code>Delete</code> event for this journey, with user, timestamp, version, and publish status</td></tr>
                   <tr><td>Open in JB</td><td>Top-right button — opens Journey Builder in a new tab</td></tr>
                </tbody>
             </table>
@@ -1463,6 +1464,19 @@ graph TD
             <div class="callout callout-info">
                <div class="callout-title"><i class="iconoir-info-circle"></i> Schedule resolution</div>
                <p>The eventDefinition's <code>metaData.scheduleState</code> field is unreliable — it reports "No Schedule" even when the <code>schedule</code> object is fully populated. The humanizer drives off <code>schedule.frequency</code> / <code>schedule.startDateTime</code> / <code>scheduleFlowMode</code> instead.</p>
+            </div>
+
+            <h3>Audit Log Modal</h3>
+            <p>Click the <strong>Audit Log</strong> button in the detail card header to pop a timeline modal of every lifecycle event for the journey. Same modal shell as the asset preview (backdrop blur, scale-in animation, Esc / click-outside to close). Available from both main search and DE Usage "Used in → Journeys".</p>
+            <ul>
+               <li><strong>Summary strip</strong> at the top — colored action pills (e.g. <code>12 Modify · 4 Publish · 1 Create</code>) + total events + unique editor count for a quick read</li>
+               <li><strong>Vertical timeline</strong> below — left dot column color-coded by action; content column shows action name + version chip + <code>publishStatus</code> pill (red on <code>PublishFailed</code>) + user + humanized timestamp</li>
+               <li><strong>Cache per <code>interactionId</code></strong> in a module-scoped <code>Map</code> — re-opens are instant</li>
+            </ul>
+            <p>Endpoint: <code>mc.{stack}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/{id}/audit/all</code> — cookie-only proxy version of the documented <code>marketingcloudapps.com/contactsmeta/fuelapi/...</code> path. Works with session cookies alone, no CSRF needed.</p>
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-info-circle"></i> No "Activated" event</div>
+               <p>SFMC's audit log exposes only five action types (<code>create</code>, <code>modify</code>, <code>publish</code>, <code>unpublish</code>, <code>delete</code>) — there is no dedicated <code>activate</code> action. In practice, the most recent <code>Modify</code> or <code>Publish</code> is usually the activator since SFMC locks a journey's current version from edits once it's activated. The modal surfaces this hint in its footer.</p>
             </div>
 
             <h3>Status Colors</h3>

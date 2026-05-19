@@ -525,6 +525,43 @@ export async function handleFetchJourneyEventDefinition(request, sendResponse) {
 }
 
 /**
+ * Fetch the audit log for a journey. SFMC's documented endpoint is at
+ * `marketingcloudapps.com/contactsmeta/fuelapi/.../audit/all` which requires
+ * a CSRF token; the equivalent cookie-only proxy path on
+ * `exacttarget.com/cloud/fuelapi/.../audit/all` works with just session
+ * cookies and is what every other read API in the extension uses. Each
+ * audit item carries `id`, `action` (Create / Modify / Publish), `user`,
+ * `timeStamp`, `versionNumber`, `publishStatus`, `publishRequestId`.
+ *
+ * @param {Object} request - { interactionId, instance }
+ * @param {Function} sendResponse
+ */
+export async function handleFetchJourneyAuditLog(request, sendResponse) {
+    const { interactionId, instance } = request;
+    if (!interactionId) {
+        sendResponse({ success: false, error: 'Missing interaction ID' });
+        return;
+    }
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/${interactionId}/audit/all`;
+    try {
+        const resp = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: { accept: 'application/json' }
+        });
+        if (!resp.ok) {
+            sendResponse({ success: false, error: `HTTP ${resp.status}` });
+            return;
+        }
+        const data = await resp.json();
+        sendResponse({ success: true, data });
+    } catch (err) {
+        sendResponse({ success: false, error: err.message });
+    }
+}
+
+/**
  * Fetch a single journey interaction's full detail. Returns the journey
  * including the `activities[]` array (used to derive the accurate activity
  * count that matches SFMC's UI — count of entries whose `type` is set).

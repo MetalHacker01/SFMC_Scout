@@ -1,7 +1,7 @@
 // background.js — SFMC Scout
 // Copyright (c) 2026 Aldorino Rrushi
 
-import { handleFetchDEUsageQueries, handleFetchDEUsageAutomations, handleFetchDEUsageJourneys, handleFetchJourneyEventDefinition, handleFetchJourneyGoalStats, handleFetchJourneyInteractionDetail, handleFetchDEUsageAutomationsStream, handleFetchDEUsageJourneysStream, handleInvalidateUsageIndex, handleFetchFieldDefinitions, handleUpdateFieldDefinitions, handleCreateFieldDefinitions } from './handlers/de/index.js';
+import { handleFetchDEUsageQueries, handleFetchDEUsageAutomations, handleFetchDEUsageJourneys, handleFetchJourneyEventDefinition, handleFetchJourneyGoalStats, handleFetchJourneyInteractionDetail, handleFetchJourneyAuditLog, handleFetchDEUsageAutomationsStream, handleFetchDEUsageJourneysStream, handleInvalidateUsageIndex, handleFetchFieldDefinitions, handleUpdateFieldDefinitions, handleCreateFieldDefinitions } from './handlers/de/index.js';
 import { handleFetchAutomationDetails, handleFetchAutomationSteps, handleFetchAutomationDefinition, handleFetchActivityCode } from './handlers/automation/index.js';
 import { handleGetSnippets, handleUpdateSnippetUsageCount } from './handlers/snippet/index.js';
 import { handleUniversalSearch, handleUniversalSearchStream } from './handlers/search/index.js';
@@ -508,6 +508,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (key === 'fetchJourneyInteractionDetail') {
         handleFetchJourneyInteractionDetail(request, sendResponse);
+        return true;
+    }
+    if (key === 'fetchJourneyAuditLog') {
+        handleFetchJourneyAuditLog(request, sendResponse);
         return true;
     }
     if (key === 'fetchAssetPreview') {

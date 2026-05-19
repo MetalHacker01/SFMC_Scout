@@ -4,6 +4,41 @@ A chronological log of bugs and their working fixes. **Read this before touching
 
 ---
 
+## 2026-05-19 — Journey audit-log timeline modal + scrollable SQL preview
+
+**Two enhancements:**
+
+*Journey audit log:*
+Added a CTA on the journey detail card (next to "Open in JB") that opens an inline modal showing the lifecycle of edits to that journey — Create / Modify / Publish events with user, timestamp, version, and publish status. Available in both main search journey rows and the DE Usage "Used in → Journeys" list.
+
+Endpoint: `mc.{stack}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/{id}/audit/all` — cookie-only proxy version of the documented `marketingcloudapps.com/contactsmeta/fuelapi/...` path. Works with session cookies alone, no CSRF needed (same pattern every other read path uses).
+
+Modal layout:
+- Summary strip at the top — colored action pills (e.g. "12 Modify · 4 Publish · 1 Create") + total events + unique editors count
+- Vertical timeline below — left dot column color-coded by action (Create = accent, Modify = neutral, Publish = success / red on failed), content column shows action name + version chip + publishStatus pill + user + humanized timestamp
+- Note at the bottom calling out that "Publish" means the definition was saved to runtime — not necessarily that contacts started entering (SFMC's audit log doesn't expose a dedicated "Activated" event, which the user flagged)
+
+Reuses the asset-preview modal's `.scout-preview-overlay` / `.scout-preview-modal` shell (backdrop blur, scale-in animation, Esc + click-outside to close). Fetcher caches per `interactionId` in a module-scoped Map — re-opens are instant.
+
+*SQL preview scrollable in DE Used In:*
+Previously the query preview pre-block sliced SQL at 400 chars with a "…" — confusing because users couldn't see the rest. Now: full SQL rendered, container capped at `max-height: 280px` with `overflow-y: auto`. Custom scrollbar styling so it doesn't look out of place in dark mode. `word-break: break-word` (was `break-all`) keeps long identifiers from splitting mid-character when possible.
+
+**Files touched:**
+- `handlers/de/DEUsageHandler.js` — new `handleFetchJourneyAuditLog` (cookie-only proxy GET to `/audit/all`)
+- `handlers/de/index.js`, `background.js` — export + route `fetchJourneyAuditLog`
+- `content.js` — `_journeyAuditCache`, `fetchJourneyAuditLog`, `formatAuditTime`, `showJourneyAuditModal`, `renderJourneyAuditTimeline`; new `I.clock` icon; `renderJourneyDetail` header now has two-button action group; click dispatch in BOTH search + DE-usage binders refactored to discriminate on `data-jbUrl` vs `data-auditId`
+- `panel.css` — `.scout-audit-*` block (summary pills, timeline with vertical line, dots, action/version/status row, note footer), `.scout-jdetail-head-actions` for the two-button card header, removed `.slice(0,400)` truncation + made `.scout-query-sql` scrollable
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Hitting `marketingcloudapps.com/contactsmeta/fuelapi/...` directly for read paths that the cookie-only proxy can serve.** The same `interaction/v1/interactions/{id}/audit/all` path lives at `mc.{stack}.exacttarget.com/cloud/fuelapi/...` — no CSRF token needed. Single source of truth for auth across the extension.
+- **Slicing query previews with "…" instead of scrolling.** SQL is long because business logic is long; cutting it off mid-clause is misleading. Cap the container with `max-height` + `overflow-y: auto` and let the user read all of it inline.
+- **A single dispatch handler on `.scout-jdetail-open` reading only one data attribute.** When new card-header buttons get added (Audit, "Open in JB", future), the handler must check all relevant `data-*` attributes — otherwise new buttons silently no-op. Pattern: `if (btn.dataset.jbUrl) ... else if (btn.dataset.auditId) ...`.
+- **Hardcoding "Activated" status into audit timeline UI.** SFMC's audit endpoint doesn't surface an Activate event explicitly — Publish is the closest signal. Note this in the modal footer so users don't think the data is missing.
+
+---
+
 ## 2026-05-19 — Public-facing polish: README ghost-tabs link, Mermaid timing, missing icons, license clarity
 
 **Problems:**
