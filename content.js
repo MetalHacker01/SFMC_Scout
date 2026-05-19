@@ -13,8 +13,6 @@ window.__SCS_LOADED__ = true;
 // ============================================================
 const SCS = {
     PANEL_WIDTH_DEFAULT: 660,
-    PANEL_WIDTH_MIN: 440,
-    PANEL_WIDTH_MAX: 1100,
     CACHE_TTL_MS: 5 * 60 * 1000,
     TOKEN_POLL_MS: 1500,
     TOKEN_TIMEOUT_MS: 22000
@@ -382,7 +380,6 @@ function sfmcFetch(url, method, extraHeaders, body) {
 // ============================================================
 function buildPanelHTML() {
     return `
-<div id="scout-resize-handle"></div>
 <div class="scout-header">
     <div class="scout-header-brand">
         <img src="${chrome.runtime.getURL('icons/icon-48.png')}" class="scout-logo" alt="Scout">
@@ -4109,11 +4106,11 @@ function statusToClass(s) {
 function createPanel() {
     if (document.getElementById('scout-panel')) return;
 
-    const savedWidth = parseInt(localStorage.getItem('scout_panel_width') || SCS.PANEL_WIDTH_DEFAULT, 10);
-
+    // Fixed panel width — drag-to-resize removed (glitchy on long pages,
+    // and a fixed default better matches the rest of the app's layout).
     const panel = document.createElement('div');
     panel.id = 'scout-panel';
-    panel.style.width = Math.min(Math.max(savedWidth, SCS.PANEL_WIDTH_MIN), SCS.PANEL_WIDTH_MAX) + 'px';
+    panel.style.width = SCS.PANEL_WIDTH_DEFAULT + 'px';
     panel.innerHTML = buildPanelHTML();
     document.body.appendChild(panel);
 
@@ -4130,9 +4127,6 @@ function createPanel() {
         <span class="scout-toggle-label">Scout</span>`;
     toggle.addEventListener('click', togglePanel);
     document.body.appendChild(toggle);
-
-    // Resize drag
-    setupResizeDrag(panel);
 
     // Header events
     document.getElementById('scout-close-btn')?.addEventListener('click', togglePanel);
@@ -4215,41 +4209,6 @@ function togglePanel() {
             refreshAllTokensWithGhostTabs(true);
         }
     }
-}
-
-function setupResizeDrag(panel) {
-    const handle = document.getElementById('scout-resize-handle');
-    if (!handle) return;
-    let dragging = false;
-    let startX = 0;
-    let startW = 0;
-
-    handle.addEventListener('mousedown', e => {
-        dragging = true;
-        startX = e.clientX;
-        startW = panel.offsetWidth;
-        document.body.style.userSelect = 'none';
-        document.body.style.webkitUserSelect = 'none';
-        const content = panel.querySelector('.scout-content');
-        if (content) content.style.pointerEvents = 'none';
-        e.preventDefault();
-    });
-    window.addEventListener('mousemove', e => {
-        if (!dragging) return;
-        const dx = startX - e.clientX;
-        const newW = Math.min(Math.max(startW + dx, SCS.PANEL_WIDTH_MIN), SCS.PANEL_WIDTH_MAX);
-        panel.style.width = newW + 'px';
-        document.documentElement.style.setProperty('--scout-panel-w', newW + 'px');
-    });
-    window.addEventListener('mouseup', () => {
-        if (!dragging) return;
-        dragging = false;
-        document.body.style.userSelect = '';
-        document.body.style.webkitUserSelect = '';
-        const content = panel.querySelector('.scout-content');
-        if (content) content.style.pointerEvents = '';
-        localStorage.setItem('scout_panel_width', panel.offsetWidth);
-    });
 }
 
 // ============================================================

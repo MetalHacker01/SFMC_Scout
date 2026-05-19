@@ -66,23 +66,6 @@
   box-sizing: border-box;
 }
 
-/* ── Resize Handle ──────────────────────────────────────────── */
-#scout-resize-handle {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 5px;
-  height: 100%;
-  cursor: ew-resize;
-  z-index: 10;
-  background: transparent;
-}
-#scout-resize-handle:hover,
-#scout-resize-handle.dragging {
-  background: var(--s-accent);
-  opacity: 0.4;
-}
-
 /* ── Toggle Button ──────────────────────────────────────────── */
 #scout-toggle {
   position: fixed;
