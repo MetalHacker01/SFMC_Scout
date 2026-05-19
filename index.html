@@ -1303,19 +1303,27 @@ async function makeAPIRequest(url, method, headers, body) {
                </tbody>
             </table>
 
-            <h3>Result Actions</h3>
+            <h3>Result Actions (Click to Expand)</h3>
             <ul>
-               <li><strong>Automations</strong> — click result to load full step breakdown inline</li>
-               <li><strong>Assets / Emails</strong> — click to copy name to clipboard; badge shows asset type</li>
+               <li><strong>Automations</strong> — click result to load full step breakdown inline (SQL / SSJS / Send Email / Import / File Transfer / Data Extract / Filter)</li>
+               <li><strong>Assets / Emails / Templates</strong> — click to open the inline detail card. Email ID, full folder path, file size + dimensions for uploads. Action row: <strong>Preview</strong> (renders email/template thumbnail in a modal via <code>/artifacts/thumbnail/html?...</code>), <strong>View image / Open file</strong> (clickable <code>fileProperties.publishedURL</code>), <strong>Copy name</strong></li>
                <li><strong>Data Extensions</strong> — click to view field count, folder, sendable flag</li>
-               <li><strong>Journeys</strong> — click to view status, version, channel</li>
-               <li><strong>Activities</strong> — click to view target DE, key, description</li>
+               <li><strong>Journeys</strong> — click to open the detail card with activity count, population, entry source DE, entry criteria (code block), schedule humanizer, and "Open in JB" deep-link</li>
+               <li><strong>Activities</strong> — row meta line shows <strong>Type · Folder breadcrumb · Update Mode</strong> (Overwrite / Append / Update / Update Add). Folder hydrated per-row via parallel <code>?view=categoryinfo</code> calls; HTTP/2 multiplexes so cost is ≈ one extra request</li>
             </ul>
 
             <div class="callout callout-info">
                <div class="callout-title"><i class="iconoir-refresh-double"></i> Streaming Results</div>
                <p>Search results appear progressively as each entity type responds. You don't need to wait for all sources — Automation results may appear while Journey results are still loading.</p>
             </div>
+
+            <h3>Asset Preview Modal</h3>
+            <p>Clicking <strong>Preview</strong> on an email or template row opens a centered modal overlay that fetches the rendered HTML thumbnail. Two endpoint shapes are used depending on asset type:</p>
+            <ul>
+               <li><strong>Email</strong> (<code>templatebasedemail</code> / <code>htmlemail</code> / <code>textonlyemail</code>) → <code>/artifacts/thumbnail/html?includeHeaderFooter=true&includeDesignContent=true</code></li>
+               <li><strong>Template</strong> (<code>template</code> / <code>emailtemplate</code>) → <code>/artifacts/thumbnail/</code> (no <code>/html</code> suffix — that path 404s on pure templates)</li>
+            </ul>
+            <p>Click outside the modal or press <strong>Escape</strong> to close. Backdrop blur, scale-in animation. Cached per asset ID — re-opens are instant.</p>
          </section>
 
          <!-- AUTOMATIONS -->
@@ -1418,84 +1426,110 @@ graph TD
          <!-- JOURNEYS -->
          <section id="journeys">
             <h2>Journeys</h2>
-            <p>The Journeys tab lists all Journey Builder entries with status, version, and channel information.</p>
+            <p>Journey rows in the universal search return rich metadata pulled directly from the <code>interaction/v1/interactions/</code> bulk endpoint plus a per-row hydration via <code>eventDefinitions/{id}</code> when the row is expanded.</p>
 
-            <h3>Fetched Fields</h3>
+            <h3>Row Pills (at-a-glance)</h3>
             <table>
                <thead>
-                  <tr><th>Field</th><th>Description</th></tr>
+                  <tr><th>Pill</th><th>Source</th></tr>
                </thead>
                <tbody>
-                  <tr><td>Name</td><td>Journey display name</td></tr>
-                  <tr><td>Status</td><td>Running / Draft / Stopped / Unpublished</td></tr>
-                  <tr><td>Version</td><td>Current version number</td></tr>
-                  <tr><td>Channel</td><td>Email, Mobile Push, etc.</td></tr>
-                  <tr><td>Key</td><td>Unique journey key (click to copy)</td></tr>
-                  <tr><td>Modified</td><td>Last modification date</td></tr>
+                  <tr><td><strong>Status</strong></td><td>color-coded — Published/Running (green), Draft/Paused/Unpublished (amber), Stopped/Deleted (red), Scheduled (blue)</td></tr>
+                  <tr><td><strong>vN</strong></td><td>current version number</td></tr>
+                  <tr><td><strong>HTS</strong></td><td><code>metaData.highThroughputSending.email</code> — small blue pill when high-throughput sending is enabled</td></tr>
+                  <tr><td><strong>Channel</strong></td><td>Email, Mobile Push, etc.</td></tr>
+                  <tr><td><strong>Definition Type</strong></td><td>Multistep / SingleSend / Transactional / Quicksend</td></tr>
+                  <tr><td><strong>Trigger Type</strong></td><td>EmailAudience, ApiEvent, etc. (entry-source flavor)</td></tr>
                </tbody>
             </table>
 
+            <h3>Expanded Detail Card</h3>
+            <p>Click any journey row to open an inline detail card. Two API calls fire in parallel: <code>interaction/v1/eventDefinitions/{id}</code> for entry source + schedule + criteria, and <code>interaction/v1/interactions/{id}?extras=all</code> for the activity count. Population is read directly from the search payload (<code>stats.cumulativePopulation</code>) — no extra fetch.</p>
+            <table>
+               <thead>
+                  <tr><th>Field</th><th>Source / Notes</th></tr>
+               </thead>
+               <tbody>
+                  <tr><td>Activities</td><td>Count of entries in <code>activities[]</code> with a non-null <code>type</code> field (matches SFMC's "Activity Count" badge)</td></tr>
+                  <tr><td>Population</td><td><code>stats.cumulativePopulation</code> — total contacts that have entered the journey</td></tr>
+                  <tr><td>Entry Source</td><td>Trigger type chip + Data Extension name resolved from the event definition</td></tr>
+                  <tr><td>Entry Criteria</td><td><code>metaData.criteriaDescription</code> rendered as a wrapping code block — supports long AND/OR filter expressions</td></tr>
+                  <tr><td>Schedule</td><td>Humanized from <code>schedule</code> object — "Hourly", "Every 2 days · 53 occurrences", "One-Time Schedule · Run On: 8/15/2025 10:30 AM IST", "No Schedule"</td></tr>
+                  <tr><td>Open in JB</td><td>Top-right button — opens Journey Builder in a new tab</td></tr>
+               </tbody>
+            </table>
+
+            <div class="callout callout-info">
+               <div class="callout-title"><i class="iconoir-info-circle"></i> Schedule resolution</div>
+               <p>The eventDefinition's <code>metaData.scheduleState</code> field is unreliable — it reports "No Schedule" even when the <code>schedule</code> object is fully populated. The humanizer drives off <code>schedule.frequency</code> / <code>schedule.startDateTime</code> / <code>scheduleFlowMode</code> instead.</p>
+            </div>
+
             <h3>Status Colors</h3>
             <ul>
-               <li><strong style="color: var(--success);">Green</strong> — Running (active journey)</li>
-               <li><strong style="color: var(--warning);">Yellow</strong> — Draft or Unpublished</li>
-               <li><strong style="color: var(--danger);">Red</strong> — Stopped</li>
+               <li><strong style="color: var(--success);">Green</strong> — Published / Running (active journey)</li>
+               <li><strong style="color: var(--warning);">Amber</strong> — Draft / Paused / Unpublished</li>
+               <li><strong style="color: var(--danger);">Red</strong> — Stopped / Deleted</li>
+               <li><strong style="color: var(--info);">Blue</strong> — ScheduledToRun / ScheduledToPublish</li>
             </ul>
          </section>
 
          <!-- REPORTS -->
          <section id="reports">
             <h2>Reports</h2>
-            <p>Reports open in a new browser tab as standalone self-contained HTML pages. They are fully client-side — no server required — and include live filtering, sortable columns, and dark/light theme switching.</p>
+            <p>Reports open in a new browser tab as standalone self-contained HTML pages. Fully client-side — no server required. Each report ships with live filtering, sortable columns, theme switching, and a <strong>Download CSV</strong> button in the header that converts the embedded data to CSV without round-tripping back to the extension.</p>
 
             <h3>Available Reports</h3>
             <table>
                <thead>
-                  <tr><th>Report</th><th>Columns</th><th>Formats</th></tr>
+                  <tr><th>Report</th><th>Columns</th><th>Enrichment</th></tr>
                </thead>
                <tbody>
                   <tr>
                      <td><strong>Automations</strong></td>
-                     <td>Name, Status, Key, Last Run, Schedule, Steps, Folder, Created By</td>
-                     <td>HTML, CSV</td>
+                     <td>Name · Status · Key · Last Run · Schedule · Steps · Folder · Created By · Description · Created · Modified</td>
+                     <td>Per-row hydration via <code>legacy/v1/beta/bulk/automations/automation/definition/{id}</code> for folder + <code>automation/v1/automations/{id}</code> for step count</td>
                   </tr>
                   <tr>
                      <td><strong>Journeys</strong></td>
-                     <td>Name, Status, Key, Version, Channel</td>
-                     <td>HTML, CSV</td>
+                     <td>Name · Status · v · HTS · Trigger · Entry DE · Population · Channel · Modified</td>
+                     <td>Bulk <code>eventDefinitions</code> fetch joined by <code>eventDefinitionId</code> to resolve Entry DE name; Population from <code>stats.cumulativePopulation</code> in the search payload</td>
                   </tr>
                   <tr>
                      <td><strong>Assets</strong></td>
-                     <td>Name, Type, Status, ID, Customer Key, Folder, Created By</td>
-                     <td>HTML, CSV</td>
+                     <td>Name (clickable CDN link for files) · Type · Status · ID · Email ID · Customer Key · Folder · Created By · Created · Modified</td>
+                     <td>Full folder breadcrumb resolved by walking <code>parentId</code> chain from a single <code>/asset/v1/content/categories</code> fetch; Email ID from <code>data.email.legacy.legacyId</code></td>
                   </tr>
                   <tr>
                      <td><strong>Activities</strong></td>
-                     <td>Name, Type Badge, Key, Target DE, Description</td>
-                     <td>HTML, CSV</td>
+                     <td>Name · Type Badge · Key · Target DE · Update Type · Folder · Description · Modified</td>
+                     <td>Per-row hydration via <code>?view=categoryinfo</code> on each of the 7 activity-type endpoints — yields <code>folderLocationText</code> and <code>targetUpdateTypeName</code></td>
                   </tr>
                   <tr>
                      <td><strong>Data Extensions</strong></td>
-                     <td>Name, Key, Fields (full inventory), Row Count, Sendable, Folder</td>
-                     <td>HTML, CSV, ZIP</td>
+                     <td>Name · Folder Path · ID · Key · Rows · Fields · Sendable · Sendable Field · Subscriber Field · Created · Created By · Modified · Modified By</td>
+                     <td>Full DE inventory with parent-walked folder paths</td>
                   </tr>
                </tbody>
             </table>
 
             <h3>Report Features</h3>
             <ul>
-               <li><strong>Live Filter</strong> — client-side text filter input that narrows rows in real-time</li>
-               <li><strong>Sortable Columns</strong> — click any column header to toggle ascending/descending sort</li>
-               <li><strong>Color-coded Badges</strong> — status badges use the same colors as the panel</li>
-               <li><strong>Dark / Light Theme</strong> — theme toggle inside the report, synced with panel preference</li>
-               <li><strong>Instance Metadata</strong> — report header shows SFMC instance, generation date, and total count</li>
-               <li><strong>Scout Logo</strong> — branded report header for professional presentation</li>
+               <li><strong>Download CSV (in-blob)</strong> — accent-filled button in the report header. UTF-8 BOM, proper escaping. Self-contained — the data is embedded in the HTML, conversion runs in the page's own JS.</li>
+               <li><strong>Live Filter</strong> — text input that narrows rows in real time</li>
+               <li><strong>Sortable Columns</strong> — click any column header to toggle ascending/descending</li>
+               <li><strong>Color-coded Badges</strong> — status colors match the panel</li>
+               <li><strong>Dark / Light Theme</strong> — server-side theme injection so the report opens correct on first paint</li>
+               <li><strong>Instance Metadata</strong> — report header shows SFMC instance, generation date, total count</li>
+               <li><strong>Scout Logo</strong> — branded report header</li>
             </ul>
 
             <div class="callout callout-success">
                <div class="callout-title"><i class="iconoir-reports"></i> Standalone HTML</div>
-               <p>Generated reports are fully self-contained — all styles and data are inline. Save the HTML file to share with colleagues or keep as an audit snapshot. No active SFMC session required to view a saved report.</p>
+               <p>Generated reports are fully self-contained — all styles, data, and the CSV converter are inline. Save the HTML file to share with colleagues or keep as an audit snapshot. The Download CSV button continues to work even when offline because the data is embedded in the page.</p>
             </div>
+
+            <h3>Asset Report — Clickable CDN Links</h3>
+            <p>For uploaded files (images, PDFs, fonts), the asset Name cell links to <code>fileProperties.publishedURL</code> so the report doubles as a one-click audit dashboard for production assets.</p>
          </section>
 
          <!-- SNIPPETS -->

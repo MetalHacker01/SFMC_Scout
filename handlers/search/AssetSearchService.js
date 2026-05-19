@@ -13,6 +13,87 @@
 // pageSize=40 with the same predicate runs fine on a 100k-asset prod org and returns
 // in under a second.
 
+/**
+ * Fetch a rendered thumbnail for an email or template asset. Two endpoint
+ * shapes exist, picked by asset type:
+ *
+ *   - Emails (templatebasedemail / htmlemail / textonlyemail):
+ *       /artifacts/thumbnail/html?includeHeaderFooter=true&includeDesignContent=true
+ *     Returns { width, height, image } where `image` is raw base64 PNG.
+ *
+ *   - Templates (template / emailtemplate):
+ *       /artifacts/thumbnail/                  ← trailing slash, no /html
+ *     Same response shape.
+ *
+ * The template endpoint 404s when you try the /html suffix and vice versa,
+ * so the caller passes `assetTypeName` and we pick the right path.
+ *
+ * @param {Object} request { assetId, instance, assetTypeName }
+ * @param {Function} sendResponse
+ */
+export async function handleFetchAssetPreview(request, sendResponse) {
+    const { assetId, instance, assetTypeName } = request;
+    if (!assetId) {
+        sendResponse({ success: false, error: 'Missing asset ID' });
+        return;
+    }
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const t = (assetTypeName || '').toLowerCase();
+    // 'template' / 'emailtemplate' use the bare /thumbnail/ endpoint.
+    // 'templatebasedemail' is an EMAIL (it has /html) — only the literal
+    // 'template' family uses the bare variant.
+    const isTemplateOnly = (t === 'template') || (t === 'emailtemplate');
+    const path = isTemplateOnly
+        ? 'thumbnail/'
+        : 'thumbnail/html?includeHeaderFooter=true&includeDesignContent=true';
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/assets/${assetId}/artifacts/${path}`;
+    try {
+        const resp = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: { accept: '*/*' }
+        });
+        if (!resp.ok) {
+            sendResponse({ success: false, error: `HTTP ${resp.status}` });
+            return;
+        }
+        const data = await resp.json();
+        sendResponse({ success: true, data });
+    } catch (err) {
+        sendResponse({ success: false, error: err.message });
+    }
+}
+
+/**
+ * Fetch the full asset category tree for an instance so we can build full
+ * folder paths client-side. SFMC's category records are flat (id + name +
+ * parentId), so we pull them all once per session and walk the chain in
+ * memory to render "Content Builder / Email / Test" rather than just "Email".
+ *
+ * @param {Object} request { instance }
+ * @param {Function} sendResponse
+ */
+export async function handleFetchAssetCategories(request, sendResponse) {
+    const { instance } = request;
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories?$page=1&$pagesize=500`;
+    try {
+        const resp = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: { accept: 'application/json' }
+        });
+        if (!resp.ok) {
+            sendResponse({ success: false, error: `HTTP ${resp.status}` });
+            return;
+        }
+        const data = await resp.json();
+        sendResponse({ success: true, data });
+    } catch (err) {
+        sendResponse({ success: false, error: err.message });
+    }
+}
+
 export class AssetSearchService {
     static MAX_RESULTS = 40;
 
@@ -91,7 +172,9 @@ export class AssetSearchService {
             return {
                 results: items.slice(0, this.MAX_RESULTS).map(item => {
                     const typeName = item.assetType ? (item.assetType.name || item.assetType.displayName || '') : '';
-                    const isEmail = typeName.toLowerCase().includes('email') || typeName.toLowerCase().includes('htmlpaste') || typeName.toLowerCase().includes('templatebasedemail');
+                    const typeId   = item.assetType ? item.assetType.id : null;
+                    const lcType   = typeName.toLowerCase();
+                    const isEmail  = lcType.includes('email') || lcType.includes('htmlpaste') || lcType.includes('templatebasedemail');
                     const ownerObj = item.createdBy || item.owner || null;
                     const createdBy = ownerObj
                         ? (typeof ownerObj === 'string' ? ownerObj : (ownerObj.name || ownerObj.email || ''))
@@ -99,17 +182,44 @@ export class AssetSearchService {
                     const modifiedBy = item.modifiedBy
                         ? (typeof item.modifiedBy === 'string' ? item.modifiedBy : (item.modifiedBy.name || item.modifiedBy.email || ''))
                         : '';
+                    // Surface the fields the detail card needs WITHOUT a second
+                    // GET — the bulk search response is the same shape as the
+                    // single-asset endpoint, so everything we need is already
+                    // here. Adding a per-row /assets/{id} fetch would be wasteful.
+                    const fp     = item.fileProperties || null;
+                    const legacy = item.data && item.data.email && item.data.email.legacy
+                                   ? item.data.email.legacy : null;
                     return {
                         type: isEmail ? 'email' : 'asset',
                         id: item.id,
                         assetId: item.id,
                         name: item.name || '(Unnamed)',
+                        description: item.description || '',
                         assetType: item.assetType ? (item.assetType.displayName || item.assetType.name) : 'Asset',
+                        assetTypeName: typeName,
+                        assetTypeId: typeId,
+                        customerKey: item.customerKey || null,
+                        objectID: item.objectID || null,
+                        status: item.status && item.status.name ? item.status.name : null,
                         path: item.category ? item.category.name : null,
+                        categoryId: item.category ? item.category.id : null,
+                        categoryParentId: item.category ? item.category.parentId : null,
                         modifiedDate: item.modifiedDate || null,
                         createdDate: item.createdDate || null,
                         createdBy: createdBy || null,
                         modifiedBy: modifiedBy || null,
+                        // SFMC's "EmailID" (the integer ID surfaced in classic
+                        // Email Studio) lives at data.email.legacy.legacyId.
+                        legacyId: legacy ? (legacy.legacyId || null) : null,
+                        // fileProperties is populated for uploaded files only —
+                        // images, PDFs, font files, etc. publishedURL is the
+                        // CDN link suitable for "View File" / image preview.
+                        publishedURL: fp ? (fp.publishedURL || null) : null,
+                        fileName:     fp ? (fp.fileName     || null) : null,
+                        fileSize:     fp ? (fp.fileSize     || null) : null,
+                        fileWidth:    fp ? (fp.width        || null) : null,
+                        fileHeight:   fp ? (fp.height       || null) : null,
+                        fileExtension:fp ? (fp.extension    || null) : null,
                         url: `https://mc.${stack}.exacttarget.com/cloud/#app/Content%20Builder`
                     };
                 }),

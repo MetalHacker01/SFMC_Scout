@@ -287,16 +287,39 @@ export async function handleFetchDEUsageJourneysStream(request, port) {
 
         // ── Step C: search index in memory ─────────────────────────────────
         const matchingJourneys = [];
+        const enrichedRow = (journey, trigger, evDef) => {
+            const tMeta = (trigger && trigger.metaData) || {};
+            const hts = !!(journey.metaData &&
+                journey.metaData.highThroughputSending &&
+                journey.metaData.highThroughputSending.email);
+            return {
+                id: journey.id,
+                key: journey.key || null,
+                name: journey.name,
+                version: journey.version || 1,
+                status: journey.status || 'Unknown',
+                channel: journey.channel || '',
+                definitionType: journey.definitionType || '',
+                entryMode: journey.entryMode || '',
+                executionMode: journey.executionMode || '',
+                isHTS: hts,
+                triggerType: (evDef && evDef.type) || (trigger && trigger.type) || '',
+                eventName: (evDef && evDef.name) || (trigger && trigger.name) || '',
+                eventType: (evDef && evDef.type) || (trigger && trigger.type) || '',
+                eventDefinitionId: tMeta.eventDefinitionId || (evDef && evDef.id) || null,
+                eventDefinitionKey: tMeta.eventDefinitionKey || (evDef && evDef.eventDefinitionKey) || null,
+                dataExtensionName: (evDef && evDef.dataExtensionName) || deName || '',
+                createdDate: journey.createdDate || null,
+                modifiedDate: journey.modifiedDate || null,
+                lastPublishedDate: journey.lastPublishedDate || null
+            };
+        };
         for (const journey of idx.journeyList) {
             for (const trigger of (journey.triggers || [])) {
                 // Fast path: dataExtensionId is sometimes inline in trigger metadata
                 const directDeId = trigger.metaData && trigger.metaData.dataExtensionId;
                 if (directDeId && directDeId.toLowerCase() === deId.toLowerCase()) {
-                    matchingJourneys.push({
-                        id: journey.id, name: journey.name, version: journey.version,
-                        eventName: trigger.name || '', eventType: trigger.type || '',
-                        dataExtensionName: deName || ''
-                    });
+                    matchingJourneys.push(enrichedRow(journey, trigger, null));
                     break;
                 }
                 // Slow path: look up via event definition
@@ -307,14 +330,7 @@ export async function handleFetchDEUsageJourneysStream(request, port) {
                 const evDeId = evDef.dataExtensionId ||
                     (evDef.arguments && evDef.arguments.dataExtensionId);
                 if (evDeId && evDeId.toLowerCase() === deId.toLowerCase()) {
-                    matchingJourneys.push({
-                        id: journey.id,
-                        name: journey.name,
-                        version: journey.version,
-                        eventName: evDef.name || trigger.name || '',
-                        eventType: evDef.type || trigger.type || '',
-                        dataExtensionName: evDef.dataExtensionName || deName || ''
-                    });
+                    matchingJourneys.push(enrichedRow(journey, trigger, evDef));
                     break; // only include a journey once even if it has multiple matching triggers
                 }
             }
@@ -433,13 +449,30 @@ export async function handleFetchDEUsageJourneys(request, sendResponse) {
                 const eventDeId = eventDef.dataExtensionId ||
                     (eventDef.arguments && eventDef.arguments.dataExtensionId);
                 if (eventDeId && eventDeId.toLowerCase() === deId.toLowerCase()) {
+                    const tMeta = trigger.metaData || {};
+                    const hts = !!(journey.metaData &&
+                        journey.metaData.highThroughputSending &&
+                        journey.metaData.highThroughputSending.email);
                     matchingJourneys.push({
                         id: journey.id,
+                        key: journey.key || null,
                         name: journey.name,
-                        version: journey.version,
+                        version: journey.version || 1,
+                        status: journey.status || 'Unknown',
+                        channel: journey.channel || '',
+                        definitionType: journey.definitionType || '',
+                        entryMode: journey.entryMode || '',
+                        executionMode: journey.executionMode || '',
+                        isHTS: hts,
+                        triggerType: eventDef.type || trigger.type || '',
                         eventName: eventDef.name || trigger.name || '',
                         eventType: eventDef.type || trigger.type || '',
-                        dataExtensionName: eventDef.dataExtensionName || deName || ''
+                        eventDefinitionId: tMeta.eventDefinitionId || eventDef.id || null,
+                        eventDefinitionKey: tMeta.eventDefinitionKey || eventDef.eventDefinitionKey || null,
+                        dataExtensionName: eventDef.dataExtensionName || deName || '',
+                        createdDate: journey.createdDate || null,
+                        modifiedDate: journey.modifiedDate || null,
+                        lastPublishedDate: journey.lastPublishedDate || null
                     });
                     break; // only include a journey once even if multiple triggers match
                 }
@@ -455,7 +488,7 @@ export async function handleFetchDEUsageJourneys(request, sendResponse) {
 /**
  * Handle fetching event definition details for a specific journey.
  * @param {Object} request - Contains eventDefinitionId and instance
- * @param {Function} sendResponse 
+ * @param {Function} sendResponse
  */
 export async function handleFetchJourneyEventDefinition(request, sendResponse) {
     const { eventDefinitionId, instance } = request;
@@ -464,8 +497,12 @@ export async function handleFetchJourneyEventDefinition(request, sendResponse) {
         return;
     }
 
-    const sfmcInstance = instance || 's51'; // Default to s51 if no instance provided
-    const url = `https://mc.${sfmcInstance}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions/${eventDefinitionId}`;
+    // instance arrives as either 'mc.s11' or 's11' — strip the optional 'mc.'
+    // prefix before prepending it again, otherwise the URL becomes
+    // mc.mc.s11.exacttarget.com (which 404s and surfaces as
+    // "No data returned" to the UI).
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions/${eventDefinitionId}`;
 
     try {
         const response = await fetch(url, {
@@ -482,6 +519,76 @@ export async function handleFetchJourneyEventDefinition(request, sendResponse) {
 
         const data = await response.json();
         sendResponse({ success: true, data: data });
+    } catch (error) {
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Fetch a single journey interaction's full detail. Returns the journey
+ * including the `activities[]` array (used to derive the accurate activity
+ * count that matches SFMC's UI — count of entries whose `type` is set).
+ * This replaces the older goal-statistics call for activity count.
+ *
+ * @param {Object} request - { interactionId, versionNumber, instance }
+ * @param {Function} sendResponse
+ */
+export async function handleFetchJourneyInteractionDetail(request, sendResponse) {
+    const { interactionId, versionNumber, instance } = request;
+    if (!interactionId) {
+        sendResponse({ success: false, error: 'Missing interaction ID' });
+        return;
+    }
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const ver = versionNumber || 1;
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/${interactionId}?extras=all&includeStops=true&versionNumber=${ver}`;
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: { accept: 'application/json' }
+        });
+        if (!response.ok) {
+            sendResponse({ success: false, error: `HTTP ${response.status}` });
+            return;
+        }
+        const data = await response.json();
+        sendResponse({ success: true, data });
+    } catch (error) {
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Fetch goal statistics for a journey version. Kept for legacy callers; no
+ * longer used by the detail card (we now read population from the bulk-search
+ * `stats.cumulativePopulation` and activity count from the interaction detail).
+ *
+ * @param {Object} request - Contains interactionId (journey UUID) + versionNumber + instance
+ * @param {Function} sendResponse
+ */
+export async function handleFetchJourneyGoalStats(request, sendResponse) {
+    const { interactionId, versionNumber, instance } = request;
+    if (!interactionId) {
+        sendResponse({ success: false, error: 'Missing interaction ID' });
+        return;
+    }
+    const stack = (instance || 's51').replace(/^mc\./, '');
+    const ver = versionNumber || 1;
+    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/interaction/v1/goalstatistics/${interactionId}?versionNumber=${ver}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: { accept: 'application/json' }
+        });
+        if (!response.ok) {
+            sendResponse({ success: false, error: `HTTP ${response.status}` });
+            return;
+        }
+        const data = await response.json();
+        sendResponse({ success: true, data });
     } catch (error) {
         sendResponse({ success: false, error: error.message });
     }

@@ -30,10 +30,14 @@ export class JourneySearchService {
             const term = searchTerm.trim();
             const encodedTerm = encodeURIComponent(term);
 
+            // extras=trigger,stats,tag,activity,campaigns matches Journey
+            // Builder's own UI request (verified via HAR) — gives us inline
+            // trigger metaData so we can derive eventDefinitionId / dataExtensionName
+            // / triggerType without a follow-up call for the row display.
             const url = `https://${sfmcInstance}.exacttarget.com/cloud/fuelapi/interaction/v1/interactions/` +
                 `?mostRecentVersionOnly=false&mostRecentVersionOrRunningOnly=true` +
                 `&$page=1&$pageSize=${this.MAX_RESULTS}` +
-                `&extras=trigger%2Cstats%2Ctag` +
+                `&extras=trigger%2Cstats%2Ctag%2Cactivity%2Ccampaigns` +
                 `&$orderBy=modifiedDate%20desc` +
                 `&nameOrDescription=${encodedTerm}`;
 
@@ -47,15 +51,50 @@ export class JourneySearchService {
             const data = await response.json();
             const items = data.items || [];
 
-            return items.slice(0, this.MAX_RESULTS).map(journey => ({
-                type: 'journey',
-                id: journey.id,
-                name: journey.name,
-                version: journey.version || 1,
-                status: journey.status || 'Unknown',
-                modifiedDate: journey.modifiedDate || null,
-                url: `https://${sfmcInstance}.exacttarget.com/cloud/#app/Journey%20Builder/%23${journey.id}`
-            }));
+            return items.slice(0, this.MAX_RESULTS).map(journey => {
+                const trigger = (journey.triggers && journey.triggers[0]) || {};
+                const tMeta = trigger.metaData || {};
+                const hts = !!(journey.metaData &&
+                    journey.metaData.highThroughputSending &&
+                    journey.metaData.highThroughputSending.email);
+                return {
+                    type: 'journey',
+                    id: journey.id,
+                    // `key` is the externalKey/customerKey shown in SFMC UI
+                    key: journey.key || null,
+                    name: journey.name,
+                    description: journey.description || '',
+                    version: journey.version || 1,
+                    status: journey.status || 'Unknown',
+                    channel: journey.channel || '',
+                    definitionType: journey.definitionType || '',
+                    entryMode: journey.entryMode || '',
+                    executionMode: journey.executionMode || '',
+                    categoryId: journey.categoryId || null,
+                    // metaData.highThroughputSending.email → small blue "HTS" pill
+                    isHTS: hts,
+                    // trigger-derived fields (driven by extras=trigger)
+                    triggerType: trigger.type || '',
+                    triggerName: trigger.name || '',
+                    // trigger.description carries the entry criteria human-readable
+                    // string (e.g. "EmailAddress contains arrushi") — shown in
+                    // the detail card as "Entry Criteria".
+                    triggerDescription: trigger.description || '',
+                    triggerIconUrl: tMeta.iconUrl || '',
+                    triggerTitle: tMeta.title || '',
+                    eventDefinitionId: tMeta.eventDefinitionId || null,
+                    eventDefinitionKey: tMeta.eventDefinitionKey || null,
+                    // dataExtensionId is sometimes inline on the trigger meta,
+                    // sometimes only resolvable via eventDefinitions GET
+                    dataExtensionId: tMeta.dataExtensionId || null,
+                    dataExtensionName: tMeta.dataExtensionName || '',
+                    createdDate: journey.createdDate || null,
+                    modifiedDate: journey.modifiedDate || null,
+                    lastPublishedDate: journey.lastPublishedDate || null,
+                    stats: journey.stats || null,
+                    url: `https://${sfmcInstance}.exacttarget.com/cloud/#app/Journey%20Builder/%23${journey.id}`
+                };
+            });
         } catch (error) {
             return [];
         }

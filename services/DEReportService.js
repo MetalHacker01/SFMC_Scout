@@ -201,6 +201,32 @@ export async function fetchAllDeData(instance, progressCallback = null) {
  * @param {string} instance - SFMC instance (e.g., 'mc.s50')
  * @returns {string} HTML string
  */
+/**
+ * Build a CSV-shaped payload from DE rows. Used by the in-blob "Download CSV"
+ * button so the HTML report is self-contained — same fields the table shows,
+ * minus inline icons/links.
+ */
+function buildDeCsvData(allDeData) {
+    return {
+        headers: ['Name', 'Folder Path', 'ID', 'Key', 'Rows', 'Fields', 'Sendable', 'Sendable Field', 'Subscriber Field', 'Created', 'Created By', 'Modified', 'Modified By'],
+        rows: (allDeData || []).map(de => [
+            de.name || '',
+            (de.categoryFullPath || '').replace(/\\/g, '/'),
+            de.id || '',
+            de.key || '',
+            de.rowCount != null ? de.rowCount : '',
+            de.fieldCount != null ? de.fieldCount : '',
+            de.isSendable ? 'Yes' : 'No',
+            de.sendableCustomObjectField || '',
+            de.sendableSubscriberField || '',
+            de.createdDate || '',
+            de.ownerName || '',
+            de.modifiedDate || '',
+            de.modifiedByName || de.ownerName || ''
+        ])
+    };
+}
+
 export function generateReportHtml(allDeData, instance, theme = 'dark') {
     const reportDate = new Date().toLocaleString();
     const isLight = theme === 'light';
@@ -371,6 +397,23 @@ export function generateReportHtml(allDeData, instance, theme = 'dark') {
                     flex-wrap: wrap;
                 }
                 .report-meta strong { color: var(--text2); }
+                #report-csv-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: var(--accent);
+                    color: #fff;
+                    border: none;
+                    padding: 7px 12px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    font-family: inherit;
+                    transition: opacity .15s;
+                }
+                #report-csv-btn:hover { opacity: .88; }
+                #report-csv-btn:active { transform: translateY(1px); }
                 .report-body { padding: 20px 24px; flex: 1; overflow-y: auto; }
                 .search-wrap {
                     display: flex;
@@ -510,6 +553,10 @@ export function generateReportHtml(allDeData, instance, theme = 'dark') {
                     <span><strong>Generated:</strong> ${reportDate}</span>
                     <span><strong>Total:</strong> ${allDeData ? allDeData.length : 0} DEs</span>
                 </div>
+                <button id="report-csv-btn" type="button" title="Download as CSV">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20H18"/><path d="M12 4V16M12 16L15.5 12.5M12 16L8.5 12.5"/></svg>
+                    Download CSV
+                </button>
             </div>
             <div class="report-body">
             <div class="search-wrap">
@@ -539,6 +586,22 @@ export function generateReportHtml(allDeData, instance, theme = 'dark') {
             </table>
             </div>
             <script>
+                // Embedded CSV data — produced server-side from the same rows
+                // the HTML table renders. Download is wholly client-side from
+                // here (no round-trip back to the extension).
+                const _csvData = ${JSON.stringify(buildDeCsvData(allDeData)).replace(/</g, '\\u003c')};
+                const _csvFileName = "DE_Report_${(instance || 'sfmc').replace(/[^A-Za-z0-9]+/g, '_')}_" + new Date().toISOString().slice(0,10) + ".csv";
+                function _downloadCsv() {
+                    const esc = v => { const s = v == null ? '' : String(v); return /[",\\n\\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+                    const lines = [_csvData.headers.map(esc).join(',')];
+                    for (const r of (_csvData.rows || [])) lines.push(r.map(esc).join(','));
+                    const blob = new Blob(['\\uFEFF' + lines.join('\\r\\n')], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = _csvFileName; document.body.appendChild(a); a.click();
+                    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
+                }
+                document.getElementById('report-csv-btn')?.addEventListener('click', _downloadCsv);
                 // Copy DE ID on click
                 document.addEventListener('click', function(e) {
                     const deId = e.target.closest('.de-id');

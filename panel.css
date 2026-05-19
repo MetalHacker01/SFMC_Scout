@@ -480,6 +480,516 @@
 .scout-result-row-arrow svg { width: 14px; height: 14px; }
 .scout-result-row:hover .scout-result-row-arrow { color: var(--s-text-2); }
 
+/* Inline pill used inside meta lines (e.g. SQL Update Type: Overwrite/Append) */
+.scout-result-row-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 15px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--s-text-2);
+  background: var(--s-bg-2);
+  border: 1px solid var(--s-border);
+  border-radius: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Journey pill row — used under the journey name in both main search and DE usage */
+.scout-jpills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 3px 0 2px;
+}
+.scout-jp {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  background: var(--s-bg-2, rgba(127,127,127,0.12));
+  color: var(--s-text-2);
+  border: 1px solid var(--s-border-1, rgba(127,127,127,0.2));
+  white-space: nowrap;
+}
+
+/* Usage-item journey rows lay out vertically to fit pills + meta */
+.scout-usage-item-journey {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 2px;
+  cursor: pointer;
+  position: relative;
+}
+.scout-usage-item-journey .scout-usage-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding-right: 18px;
+}
+.scout-usage-item-journey .scout-usage-nav-arrow {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  opacity: 0.55;
+}
+.scout-usage-item-journey.is-open {
+  background: var(--s-bg-2, rgba(127,127,127,0.08));
+  border-radius: 6px 6px 0 0;
+}
+.scout-usage-item-journey.is-open .scout-usage-nav-arrow { opacity: 0.9; }
+
+/* ─── Inline journey detail card ───────────────────────────────────────── */
+/* Shared between main-search results and DE Usage. Designed to feel
+ * continuous with the parent row (rounded top corners flat, bottom rounded
+ * like a tab) and to use the same --s-* tokens the rest of the panel uses. */
+
+.scout-result-row-expanded {
+  background: var(--s-bg-2);
+  border-radius: var(--s-radius) var(--s-radius) 0 0;
+  border: 1px solid var(--s-border);
+  border-bottom: 0;
+}
+
+.scout-journey-detail {
+  margin: 0 0 8px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--s-border);
+  border-top: 0;
+  border-radius: 0 0 var(--s-radius) var(--s-radius);
+  background: var(--s-surface, var(--s-bg-2));
+  font-size: 12px;
+  color: var(--s-text-2);
+  animation: scoutJdetailIn 160ms cubic-bezier(0.2, 0.8, 0.4, 1);
+}
+@keyframes scoutJdetailIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Header row: small section label + Open-in-JB outline button */
+.scout-jdetail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.scout-jdetail-headlabel {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--s-text-3);
+}
+.scout-jdetail-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--s-border-mid, var(--s-border));
+  background: transparent;
+  color: var(--s-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 9px;
+  border-radius: var(--s-radius);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.scout-jdetail-open:hover {
+  color: var(--s-accent);
+  border-color: var(--s-accent);
+  background: var(--s-accent-dim);
+}
+
+/* Stat strip — Activities + Est. Population pills at the top.
+ * Uses the same accent-dim tinted style as scout-step-card-num. */
+.scout-jdetail-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--s-border);
+}
+.scout-jdetail-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--s-accent-dim);
+  border: 1px solid color-mix(in oklab, var(--s-accent) 25%, transparent);
+  border-radius: var(--s-radius);
+  line-height: 1.1;
+}
+.scout-jdetail-stat-num {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--s-accent);
+  letter-spacing: -0.02em;
+}
+.scout-jdetail-stat-label {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--s-text-3);
+  margin-top: 3px;
+}
+
+/* Field rows — Entry Source / Criteria / Schedule / External Key */
+.scout-jdetail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scout-jdetail-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.scout-jdetail-label {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--s-text-3);
+  padding-top: 4px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scout-jdetail-val {
+  color: var(--s-text);
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.scout-jdetail-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-text);
+  letter-spacing: -0.005em;
+}
+.scout-jdetail-sub {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--s-text-2);
+  margin-top: -2px;
+  line-height: 1.4;
+}
+
+/* Inline trigger-type chip (EmailAudience / ApiEvent / etc.) */
+.scout-jdetail-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 7px;
+  border-radius: 9px;
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--s-accent-dim);
+  color: var(--s-accent);
+  border: 1px solid color-mix(in oklab, var(--s-accent) 25%, transparent);
+}
+
+/* Mono pill — click-to-copy DE IDs / external keys */
+.scout-jdetail-mono {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: var(--s-text-2);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+  word-break: break-all;
+  max-width: 100%;
+}
+.scout-jdetail-mono:hover {
+  border-color: var(--s-accent);
+  color: var(--s-text);
+}
+.scout-jdetail-mono-wide {
+  display: inline-block;
+  width: 100%;
+}
+
+/* Entry-criteria pill — wraps free-form filter description text */
+.scout-jdetail-criteria {
+  display: inline-block;
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--s-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+  line-height: 1.5;
+}
+
+/* ─── Asset detail card (quieter than the journey card) ──────────────────── */
+/* No big stat strip — instead a subtle inline header-meta line (Email ID,
+ * Size, Dimensions). Actions are inline text links, not buttons. */
+
+.scout-asset-detail {
+  margin: 0 0 8px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--s-border);
+  border-top: 0;
+  border-radius: 0 0 var(--s-radius) var(--s-radius);
+  background: var(--s-surface, var(--s-bg-2));
+  font-size: 12px;
+  color: var(--s-text-2);
+  animation: scoutJdetailIn 160ms cubic-bezier(0.2, 0.8, 0.4, 1);
+}
+
+/* Inline meta strip in the header (Email ID, Size, Dimensions) */
+.scout-adetail-headmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--s-text-2);
+}
+.scout-adetail-headbit { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.scout-adetail-headbit-label {
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--s-text-3);
+}
+/* Mono pill in the asset detail header (Email ID etc.). Need explicit
+ * background + color — the browser default <code> styling can ship a light
+ * grey background that reads as white-on-white in dark mode. */
+.scout-adetail-headbit-mono {
+  display: inline-block;
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--s-text);
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.scout-adetail-headbit-mono:hover {
+  border-color: var(--s-accent);
+  color: var(--s-accent);
+}
+
+/* Action row — text links separated by dots */
+.scout-adetail-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 4px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--s-border);
+}
+.scout-adetail-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--s-accent);
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.scout-adetail-link:hover {
+  background: var(--s-accent-dim);
+  color: var(--s-accent-h, var(--s-accent));
+  text-decoration: underline;
+}
+.scout-adetail-link svg { width: 13px; height: 13px; }
+.scout-adetail-action-sep {
+  color: var(--s-text-3);
+  font-size: 11px;
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Journey entry-criteria code block — multi-line, wraps long AND/OR strings */
+.scout-jdetail-codeblock {
+  display: block;
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--s-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--s-text);
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ─── Preview modal ──────────────────────────────────────────────────────── */
+.scout-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 20, 0.62);
+  backdrop-filter: blur(2px);
+  z-index: 2147483600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: scoutPreviewIn 160ms ease-out;
+}
+.scout-preview-overlay.scout-preview-out {
+  animation: scoutPreviewOut 140ms ease-in forwards;
+}
+@keyframes scoutPreviewIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes scoutPreviewOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.scout-preview-modal {
+  background: var(--s-surface, var(--s-bg));
+  border: 1px solid var(--s-border);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+  max-width: min(92vw, 720px);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scoutPreviewModalIn 200ms cubic-bezier(0.2, 0.8, 0.4, 1);
+}
+@keyframes scoutPreviewModalIn {
+  from { transform: scale(0.96); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+.scout-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--s-border);
+  background: var(--s-bg-2);
+}
+.scout-preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.scout-preview-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--s-text-3);
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.scout-preview-close:hover {
+  color: var(--s-text);
+  background: var(--s-bg);
+  border-color: var(--s-border);
+}
+.scout-preview-body {
+  flex: 1;
+  min-height: 200px;
+  padding: 14px;
+  overflow: auto;
+  background: var(--s-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scout-preview-img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+.scout-preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--s-text-3);
+  font-size: 12px;
+  font-style: italic;
+}
+.scout-preview-loading svg { width: 24px; height: 24px; }
+.scout-preview-error {
+  color: var(--s-error, #c23934);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px;
+}
+
+/* Loading / error states */
+.scout-jdetail-loading, .scout-jdetail-empty {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--s-text-3); font-style: italic;
+  padding: 4px 0;
+}
+.scout-jdetail-error {
+  color: var(--s-error, #c23934);
+  font-size: 11px;
+  padding: 4px 0;
+}
+
 /* Results section header */
 .scout-results-group-label,
 .scout-group-label {

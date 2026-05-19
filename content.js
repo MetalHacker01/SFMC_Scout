@@ -71,6 +71,8 @@ const I = {
     email: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8L10.89 13.26C11.2187 13.4793 11.6049 13.5963 12 13.5963C12.3951 13.5963 12.7813 13.4793 13.11 13.26L21 8"/><path d="M21 8C21 6.89543 20.1046 6 19 6H5C3.89543 6 3 6.89543 3 8V16C3 17.1046 3.89543 18 5 18H19C20.1046 18 21 17.1046 21 16V8Z"/></svg>',
     asset: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15L8 10L12 14"/><path d="M12 14L15 11L21 17"/><circle cx="8.5" cy="8.5" r="1.5"/></svg>',
     query: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2"/><path d="M16 2H20V6"/><path d="M10 14L20 4"/></svg>',
+    eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 12 5.5 5 12 5C18.5 5 22 12 22 12C22 12 18.5 19 12 19C5.5 19 2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15L16 10L5 21"/></svg>',
     chevLeft: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6L9 12L15 18"/></svg>',
     reports: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H15M9 13H15M9 9H11"/><path d="M5 3H14.5L19 7.5V21H5V3Z"/><path d="M14 3V8H19"/></svg>',
     deTable: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19C3 20.66 7.03 22 12 22C16.97 22 21 20.66 21 19V5"/><path d="M3 12C3 13.66 7.03 15 12 15C16.97 15 21 13.66 21 12"/></svg>',
@@ -101,6 +103,15 @@ const S = {
     // Group keys (e.g. 'de', 'automation') whose result lists are user-expanded
     // beyond the default top-N. Reset every new search.
     searchExpandedGroups: new Set(),
+    // Journey IDs whose inline detail card is currently expanded (shared
+    // between main search rows and DE Usage journey rows — expanding in one
+    // shows the card in both).
+    journeyExpanded: new Set(),
+    journeyDetailState: new Map(), // journeyId → { state, evDef, error }
+    // Same pattern for asset/email/template rows in main search. Expanded
+    // state opens an inline detail card; the Preview button inside the card
+    // pops a modal that loads the rendered-HTML thumbnail.
+    assetExpanded: new Set(),
     splitHoverIdx: null,   // hovered result index for split preview
     deSearchQuery: '',
     deSearchResults: [],
@@ -507,10 +518,557 @@ const TYPE_LABEL = {
 
 function getTypeIcon(type) { return TYPE_ICON[type] || I.search; }
 function getTypeColor(type) { return TYPE_COLOR[type] || '#64748B'; }
+
+// ─── Journey row helpers ────────────────────────────────────────────────────
+// Colour code journey status the way Journey Builder's own UI does: greens for
+// active / scheduled, neutral for draft, red for stopped, amber for unpublished
+// changes. Anything unknown falls through to a neutral grey.
+const JOURNEY_STATUS_COLOR = {
+    'Published':         '#04844b',
+    'Running':           '#04844b',
+    'ScheduledToRun':    '#0176d3',
+    'ScheduledToPublish':'#0176d3',
+    'Stopped':           '#c23934',
+    'Deleted':           '#c23934',
+    'Paused':            '#b06f00',
+    'Unpublished':       '#b06f00',
+    // Draft = amber to match the Activity Report's Draft pill and SFMC's own
+    // JB UI (was grey before — felt washed-out next to active/stopped).
+    'Draft':             '#b06f00'
+};
+function getJourneyStatusColor(status) {
+    return JOURNEY_STATUS_COLOR[status] || '#64748b';
+}
+
+// Build the pill row that sits under a journey's name. Used in both the main
+// search results panel and the DE Usage "Used by → journeys" list.
+//   variant: 'search' (more pills) | 'usage' (compact)
+function renderJourneyPills(j, variant) {
+    const out = [];
+    if (j.status) {
+        const c = getJourneyStatusColor(j.status);
+        out.push(`<span class="scout-jp" style="background:${c}20;color:${c};border:1px solid ${c}40">${escHtml(j.status)}</span>`);
+    }
+    if (j.version) out.push(`<span class="scout-jp">v${escHtml(String(j.version))}</span>`);
+    if (j.isHTS)   out.push(`<span class="scout-jp" style="background:#0176d320;color:#0176d3;border:1px solid #0176d340" title="High-Throughput Sending">HTS</span>`);
+    if (variant === 'search') {
+        if (j.channel)        out.push(`<span class="scout-jp">${escHtml(j.channel)}</span>`);
+        if (j.definitionType) out.push(`<span class="scout-jp">${escHtml(j.definitionType)}</span>`);
+        if (j.triggerType)    out.push(`<span class="scout-jp" style="opacity:0.85">${escHtml(j.triggerType)}</span>`);
+    }
+    return out.length ? `<div class="scout-jpills">${out.join('')}</div>` : '';
+}
+
+// Module-scoped event-definition cache. Keyed by eventDefinitionId.
+// Survives across multiple expands within the same SW lifetime.
+const _evDefCache = new Map();
+// Interaction-detail cache, keyed by `${journeyId}::${version}`. Replaces
+// the older goal-stats approach for activity count — `interactions/{id}?extras=all`
+// returns the full activities[] array directly, which is what SFMC's UI counts.
+const _interactionDetailCache = new Map();
+
+function fetchJourneyEventDef(eventDefinitionId, instance) {
+    if (!eventDefinitionId) return Promise.resolve(null);
+    if (_evDefCache.has(eventDefinitionId)) {
+        return Promise.resolve(_evDefCache.get(eventDefinitionId));
+    }
+    return new Promise(resolve => {
+        const cb = (resp) => {
+            if (chrome.runtime.lastError) { resolve(null); return; }
+            if (resp && resp.success && resp.data) {
+                _evDefCache.set(eventDefinitionId, resp.data);
+                resolve(resp.data);
+            } else {
+                resolve(null);
+            }
+        };
+        try {
+            chrome.runtime.sendMessage(
+                { action: 'fetchJourneyEventDefinition', eventDefinitionId, instance },
+                cb
+            );
+        } catch (_) { resolve(null); }
+    });
+}
+
+function fetchJourneyInteractionDetail(interactionId, versionNumber, instance) {
+    if (!interactionId) return Promise.resolve(null);
+    const cacheKey = `${interactionId}::${versionNumber || 1}`;
+    if (_interactionDetailCache.has(cacheKey)) {
+        return Promise.resolve(_interactionDetailCache.get(cacheKey));
+    }
+    return new Promise(resolve => {
+        const cb = (resp) => {
+            if (chrome.runtime.lastError) { resolve(null); return; }
+            if (resp && resp.success && resp.data) {
+                _interactionDetailCache.set(cacheKey, resp.data);
+                resolve(resp.data);
+            } else { resolve(null); }
+        };
+        try {
+            chrome.runtime.sendMessage(
+                { action: 'fetchJourneyInteractionDetail', interactionId, versionNumber, instance },
+                cb
+            );
+        } catch (_) { resolve(null); }
+    });
+}
+
+// Count user-built activities from the interaction's activities array.
+// SFMC's "Activity Count" badge counts entries with a non-empty `type` field
+// (unconfigured/placeholder activities have no type and are excluded).
+function extractInteractionActivityCount(detail) {
+    if (!detail || !Array.isArray(detail.activities)) return null;
+    let count = 0;
+    for (const a of detail.activities) {
+        if (a && a.type) count++;
+    }
+    return count;
+}
+
+// Pretty-print the schedule fields the eventDefinition exposes. Mirrors what
+// SFMC's UI renders. IMPORTANT: do NOT short-circuit on
+// `metaData.scheduleState === 'No Schedule'` — that field lies. Even a
+// fully-configured recurring schedule (Hourly INTERVAL=1, UNTIL=...) has
+// scheduleState='No Schedule' alongside fully-populated `schedule` data.
+// The signal that there IS a schedule is the presence of `schedule.frequency`
+// or `schedule.startDateTime`, NOT the scheduleState text.
+function humanizeJourneySchedule(evDef) {
+    if (!evDef) return null;
+    const meta = evDef.metaData || {};
+    const sched = evDef.schedule || {};
+    const flowMode = meta.scheduleFlowMode || '';
+    const runOnceMode = meta.runOnceScheduleMode || '';
+
+    const hasFreq = !!sched.frequency;
+    const hasStart = !!sched.startDateTime;
+
+    if (!hasFreq && !hasStart && flowMode !== 'runOnce' && flowMode !== 'recurring') {
+        return null;  // genuinely no schedule
+    }
+
+    const tz = sched.timeZone || '';
+    const fmtStart = hasStart ? formatJourneyDateTime(sched.startDateTime) : null;
+    const fmtEnd   = sched.endDateTime ? formatJourneyDateTime(sched.endDateTime) : null;
+
+    // Recurring schedule: frequency present OR flowMode says so.
+    if (flowMode === 'recurring' || hasFreq) {
+        const freq = (sched.frequency || 'Recurring');
+        const interval = sched.interval || 1;
+        let title;
+        if (interval === 1) {
+            title = freq;  // "Hourly", "Daily", "Weekly" etc.
+        } else {
+            // "Hourly" → "hour", "Daily" → "day", "Weekly" → "week", "Monthly" → "month"
+            const unit = freq.toLowerCase().replace(/ly$/, '');
+            const unitNorm = unit === 'dai' ? 'day' : unit;
+            title = `Every ${interval} ${unitNorm}s`;
+        }
+
+        const parts = [];
+        if (fmtStart) parts.push(`Start: ${fmtStart}`);
+        if (sched.endType === 'EndDate' && fmtEnd) {
+            parts.push(`End: ${fmtEnd}`);
+        } else if (sched.endType === 'Occurrences' && sched.occurrences) {
+            parts.push(`${sched.occurrences} occurrence${sched.occurrences === 1 ? '' : 's'}`);
+        }
+        if (tz) parts.push(tz);
+
+        return { title, detail: parts.join(' · ') };
+    }
+
+    // One-time schedule.
+    if (flowMode === 'runOnce' || hasStart) {
+        const lead = runOnceMode === 'immediate' ? 'Run Once · Immediately' : 'One-Time Schedule';
+        return {
+            title: lead,
+            detail: fmtStart ? `Run On: ${fmtStart}${tz ? ' ' + tz : ''}` : ''
+        };
+    }
+
+    return null;
+}
+
+// SFMC schedule dates are ISO. Show as e.g. "8/15/2025 10:30 AM".
+function formatJourneyDateTime(iso) {
+    try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        return d.toLocaleString('en-US', {
+            year: 'numeric', month: 'numeric', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', hour12: true
+        });
+    } catch (_) { return iso; }
+}
+
+// Build the inline detail card under an expanded journey row. `state` is the
+// per-id entry from S.journeyDetailState. The card shows entry source DE,
+// schedule, external key, and linked automation — plus an "Open in JB" link.
+function renderJourneyDetail(j, state) {
+    const stage = state ? state.state : 'idle';
+    const evDef = state ? state.evDef : null;
+    let inner = '';
+    if (stage === 'loading') {
+        inner = `<div class="scout-jdetail-row scout-jdetail-loading">${I.spinner || ''} Loading event definition…</div>`;
+    } else if (stage === 'error') {
+        inner = `<div class="scout-jdetail-row scout-jdetail-error">Couldn't load event definition${state && state.error ? `: ${escHtml(state.error)}` : ''}.</div>`;
+    } else if (stage === 'loaded') {
+        const actCnt = state && typeof state.activityCount === 'number' ? state.activityCount : null;
+        // Population from the search payload (j.stats.cumulativePopulation) —
+        // no extra fetch. cumulativePopulation is the total contacts that
+        // have entered the journey across all time.
+        const popCnt = j.stats && typeof j.stats.cumulativePopulation === 'number'
+            ? j.stats.cumulativePopulation : null;
+
+        // ── Stat strip ──
+        const stats = [];
+        if (actCnt !== null) {
+            stats.push(`<div class="scout-jdetail-stat">
+                <span class="scout-jdetail-stat-num">${actCnt}</span>
+                <span class="scout-jdetail-stat-label">${actCnt === 1 ? 'Activity' : 'Activities'}</span>
+            </div>`);
+        }
+        if (popCnt !== null) {
+            stats.push(`<div class="scout-jdetail-stat">
+                <span class="scout-jdetail-stat-num">${popCnt.toLocaleString()}</span>
+                <span class="scout-jdetail-stat-label">Population</span>
+            </div>`);
+        }
+        const statStrip = stats.length
+            ? `<div class="scout-jdetail-stats">${stats.join('')}</div>`
+            : '';
+
+        // ── Field rows ─ Entry Source / Criteria / Schedule only. No External
+        // Key (not useful), no DE ID inside Entry Source, no entryMode anywhere.
+        const rows = [];
+        const fieldRow = (label, valueHtml) =>
+            `<div class="scout-jdetail-row">
+                <span class="scout-jdetail-label">${escHtml(label)}</span>
+                <span class="scout-jdetail-val">${valueHtml}</span>
+            </div>`;
+
+        if (evDef) {
+            const deName = evDef.dataExtensionName || j.dataExtensionName || '';
+            if (deName || evDef.type) {
+                const sourceBits = [];
+                if (evDef.type) sourceBits.push(`<span class="scout-jdetail-tag">${escHtml(evDef.type)}</span>`);
+                if (deName) sourceBits.push(`<strong class="scout-jdetail-name">${escHtml(deName)}</strong>`);
+                rows.push(fieldRow('Entry Source', sourceBits.join(' ')));
+            }
+            // Entry criteria as a multi-line code block — handles long AND/OR
+            // filter expressions with line wrapping.
+            const criteria = (evDef.metaData && evDef.metaData.criteriaDescription) || j.triggerDescription || '';
+            if (criteria) {
+                rows.push(fieldRow('Entry Criteria', `<pre class="scout-jdetail-codeblock">${escHtml(criteria)}</pre>`));
+            }
+            const sched = humanizeJourneySchedule(evDef);
+            if (sched) {
+                const detailBit = sched.detail ? `<div class="scout-jdetail-sub">${escHtml(sched.detail)}</div>` : '';
+                rows.push(fieldRow('Schedule', `<strong class="scout-jdetail-name">${escHtml(sched.title)}</strong>${detailBit}`));
+            }
+            if (evDef.description) {
+                rows.push(fieldRow('Description', escHtml(evDef.description)));
+            }
+        } else if (j.triggerDescription) {
+            rows.push(fieldRow('Entry Criteria', `<pre class="scout-jdetail-codeblock">${escHtml(j.triggerDescription)}</pre>`));
+        }
+
+        inner = `${statStrip}${rows.length ? `<div class="scout-jdetail-rows">${rows.join('')}</div>` : ''}`;
+    }
+    // Header bar: title + "Open in JB" external link
+    const openBtn = j.url
+        ? `<button class="scout-jdetail-open" data-jb-url="${escHtml(j.url)}" title="Open in Journey Builder">${I.linkExt || '↗'} Open in JB</button>`
+        : '';
+    return `<div class="scout-journey-detail" data-jid="${escHtml(j.id)}">
+        <div class="scout-jdetail-head">
+            <span class="scout-jdetail-headlabel">Journey Details</span>
+            ${openBtn}
+        </div>
+        ${inner || '<div class="scout-jdetail-row scout-jdetail-empty">No additional details.</div>'}
+    </div>`;
+}
+
+// Triggers the eventDef fetch for a journey if needed and re-renders the
+// affected detail host(s). `rerenderFn` is whichever renderer (search results
+// or DE usage) needs to be refreshed after state changes.
+function loadJourneyDetail(j, rerenderFn) {
+    if (!j || !j.id) return;
+    const existing = S.journeyDetailState.get(j.id);
+    if (existing && (existing.state === 'loading' || existing.state === 'loaded')) return;
+    S.journeyDetailState.set(j.id, { state: 'loading' });
+    rerenderFn && rerenderFn();
+
+    // Fire both in parallel: eventDefinition (entry source DE, schedule,
+    // criteria) + interaction detail (activities array → accurate count).
+    // Population now comes from the search payload (j.stats.cumulativePopulation)
+    // so no third call is needed.
+    const instance = getCurrentInstance();
+    Promise.allSettled([
+        j.eventDefinitionId
+            ? fetchJourneyEventDef(j.eventDefinitionId, instance)
+            : Promise.resolve(null),
+        fetchJourneyInteractionDetail(j.id, j.version || 1, instance)
+    ]).then(([evRes, detRes]) => {
+        const evDef  = evRes.status === 'fulfilled' ? evRes.value : null;
+        const detail = detRes.status === 'fulfilled' ? detRes.value : null;
+        const activityCount = extractInteractionActivityCount(detail);
+        if (!evDef && !detail) {
+            if (!j.eventDefinitionId) {
+                S.journeyDetailState.set(j.id, { state: 'loaded', evDef: null, activityCount: null });
+            } else {
+                S.journeyDetailState.set(j.id, { state: 'error', error: 'No data returned' });
+            }
+        } else {
+            S.journeyDetailState.set(j.id, { state: 'loaded', evDef, activityCount });
+        }
+        rerenderFn && rerenderFn();
+    });
+}
+
+function getCurrentInstance() {
+    // InstanceService is in utils/; in content.js we read from S or the live
+    // hostname. Most call paths pass instance through chrome.runtime.sendMessage,
+    // but the EventDefinition fetcher needs it here.
+    if (S.instance) return S.instance;
+    try {
+        const m = window.location.hostname.match(/mc\.(s\d+)\./);
+        return m ? `mc.${m[1]}` : 'mc.s51';
+    } catch (_) { return 'mc.s51'; }
+}
 function getTypeLabel(r) {
     if ((r.type === 'asset' || r.type === 'email') && r.assetType) return r.assetType;
     if (r.type === 'activity' && r.activityTypeLabel) return r.activityTypeLabel;
     return TYPE_LABEL[r.type] || (r.type || 'Object');
+}
+
+// ─── Asset detail / preview helpers ─────────────────────────────────────────
+// Reuses the `.scout-journey-detail` design language (stat strip + mono-uppercase
+// labels + accent-tinted chips) so asset and journey cards feel like siblings.
+
+const _assetPreviewCache = new Map(); // assetId → { image, width, height }
+
+function fetchAssetPreview(assetId, assetTypeName, instance) {
+    if (_assetPreviewCache.has(assetId)) {
+        return Promise.resolve(_assetPreviewCache.get(assetId));
+    }
+    return new Promise(resolve => {
+        try {
+            chrome.runtime.sendMessage(
+                { action: 'fetchAssetPreview', assetId, assetTypeName, instance },
+                (resp) => {
+                    if (chrome.runtime.lastError) { resolve(null); return; }
+                    if (resp && resp.success && resp.data) {
+                        _assetPreviewCache.set(assetId, resp.data);
+                        resolve(resp.data);
+                    } else { resolve(null); }
+                }
+            );
+        } catch (_) { resolve(null); }
+    });
+}
+
+// Asset category tree — pulled once per session so we can resolve full folder
+// paths ("Content Builder / Email / Test") rather than just the leaf folder
+// name. Mirrors the same idea used in CloudPages Maestro for landing pages.
+const _assetCategoryCache = new Map(); // id (string) → { id, name, parentId }
+let _assetCategoryLoad = null;          // in-flight Promise, dedupe across rows
+
+function ensureAssetCategoryTree(instance) {
+    if (_assetCategoryCache.size > 0) return Promise.resolve();
+    if (_assetCategoryLoad) return _assetCategoryLoad;
+    _assetCategoryLoad = new Promise(resolve => {
+        try {
+            chrome.runtime.sendMessage(
+                { action: 'fetchAssetCategories', instance },
+                (resp) => {
+                    if (chrome.runtime.lastError) { resolve(); return; }
+                    if (resp && resp.success && resp.data && Array.isArray(resp.data.items)) {
+                        for (const c of resp.data.items) {
+                            if (c && c.id != null) {
+                                _assetCategoryCache.set(String(c.id), {
+                                    id: c.id, name: c.name, parentId: c.parentId
+                                });
+                            }
+                        }
+                    }
+                    resolve();
+                }
+            );
+        } catch (_) { resolve(); }
+    });
+    return _assetCategoryLoad;
+}
+
+function buildFolderPath(categoryId, fallbackName) {
+    if (!categoryId) return fallbackName || '';
+    const segments = [];
+    let id = String(categoryId);
+    const seen = new Set();
+    let safety = 0;
+    while (id && id !== '0' && !seen.has(id) && safety < 20) {
+        seen.add(id);
+        const c = _assetCategoryCache.get(id);
+        if (!c) break;
+        segments.unshift(c.name);
+        id = c.parentId != null ? String(c.parentId) : null;
+        safety++;
+    }
+    if (segments.length === 0) return fallbackName || '';
+    return segments.join(' / ');
+}
+
+// Classify an asset to decide which detail layout + actions to render.
+// Driven by the data we have (presence of publishedURL / legacyId / type name)
+// rather than a brittle ID list — SFMC has 200+ asset type IDs.
+function getAssetCategory(item) {
+    const t = (item.assetTypeName || item.assetType || '').toLowerCase();
+    if (item.publishedURL) return 'file';
+    if (item.legacyId || t.includes('email')) return 'email';
+    if (t === 'template' || t.includes('template')) return 'template';
+    if (t.includes('block') || t.includes('snippet') || t.includes('codesnippet')) return 'code';
+    return 'other';
+}
+
+function formatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+const ASSET_STATUS_COLOR = {
+    'Draft':     '#b06f00',
+    'Published': '#04844b',
+    'Archived':  '#64748b',
+    'Deleted':   '#c23934'
+};
+
+function renderAssetDetail(item) {
+    const cat = getAssetCategory(item);
+    const previewable = cat === 'email' || cat === 'template';
+    const isFile      = cat === 'file';
+    const isImage     = isFile && /^(png|jpe?g|gif|bmp|webp|svg)$/i.test(item.fileExtension || '');
+
+    // Quieter design: NO big stat strip. NO Status / Customer Key rows.
+    // Instead, a single subtle inline meta line under the header carries
+    // Email ID / Size / Dimensions as small text. Buttons → text links.
+
+    const headBits = [];
+    if (item.legacyId) headBits.push(`<span class="scout-adetail-headbit"><span class="scout-adetail-headbit-label">Email ID</span> <code class="scout-adetail-headbit-mono" data-copy="${escHtml(String(item.legacyId))}" title="Click to copy">${escHtml(String(item.legacyId))}</code></span>`);
+    if (isFile && item.fileSize) headBits.push(`<span class="scout-adetail-headbit"><span class="scout-adetail-headbit-label">Size</span> ${escHtml(formatFileSize(item.fileSize))}</span>`);
+    if (isFile && item.fileWidth && item.fileHeight) headBits.push(`<span class="scout-adetail-headbit"><span class="scout-adetail-headbit-label">Dimensions</span> ${item.fileWidth}×${item.fileHeight}</span>`);
+    const headMeta = headBits.length ? `<div class="scout-adetail-headmeta">${headBits.join('')}</div>` : '';
+
+    // ── Field rows — compact, no large pills.
+    const rows = [];
+    const fieldRow = (label, valueHtml) =>
+        `<div class="scout-jdetail-row">
+            <span class="scout-jdetail-label">${escHtml(label)}</span>
+            <span class="scout-jdetail-val">${valueHtml}</span>
+        </div>`;
+
+    if (item.assetType) {
+        // Type chip only — no `id N` follower.
+        rows.push(fieldRow('Type', `<span class="scout-jdetail-tag">${escHtml(item.assetType)}</span>`));
+    }
+    // Full folder path resolved from the category cache (built on first expand).
+    const folderPath = item.categoryId
+        ? buildFolderPath(item.categoryId, item.path)
+        : (item.path || '');
+    if (folderPath) {
+        rows.push(fieldRow('Folder', escHtml(folderPath)));
+    }
+    if (item.createdDate || item.createdBy) {
+        const bits = [];
+        if (item.createdBy) bits.push(escHtml(item.createdBy));
+        if (item.createdDate) bits.push(formatDate(item.createdDate));
+        rows.push(fieldRow('Created', bits.join(' · ')));
+    }
+    if (item.modifiedDate || item.modifiedBy) {
+        const bits = [];
+        if (item.modifiedBy) bits.push(escHtml(item.modifiedBy));
+        if (item.modifiedDate) bits.push(formatDate(item.modifiedDate));
+        rows.push(fieldRow('Modified', bits.join(' · ')));
+    }
+    if (item.fileName && isFile) {
+        rows.push(fieldRow('File Name', `<code class="scout-jdetail-mono scout-jdetail-mono-wide" data-copy="${escHtml(item.fileName)}" title="Click to copy">${escHtml(item.fileName)}</code>`));
+    }
+    if (item.description) {
+        rows.push(fieldRow('Description', escHtml(item.description)));
+    }
+
+    // ── Action row — text links, not buttons. Inline separators between.
+    const actions = [];
+    if (previewable) {
+        actions.push(`<a href="#" class="scout-adetail-link" data-action="preview" data-asset-id="${escHtml(String(item.assetId || item.id))}" data-asset-name="${escHtml(item.name || '')}" data-asset-type-name="${escHtml(item.assetTypeName || '')}">${I.eye} Preview</a>`);
+    }
+    if (isFile && item.publishedURL) {
+        actions.push(`<a href="${escHtml(item.publishedURL)}" target="_blank" class="scout-adetail-link" data-action="view-file">${isImage ? I.image : I.externalLink} ${isImage ? 'View image' : 'Open file'}</a>`);
+    }
+    if (item.name) {
+        actions.push(`<a href="#" class="scout-adetail-link" data-action="copy" data-copy="${escHtml(item.name)}">${I.copy} Copy name</a>`);
+    }
+    const actionRow = actions.length
+        ? `<div class="scout-adetail-actions">${actions.join('<span class="scout-adetail-action-sep">·</span>')}</div>`
+        : '';
+
+    const headLabel = cat === 'email' ? 'Email'
+                    : cat === 'template' ? 'Template'
+                    : cat === 'file' ? 'File'
+                    : cat === 'code' ? 'Block'
+                    : 'Asset';
+
+    return `<div class="scout-asset-detail" data-aid="${escHtml(String(item.assetId || item.id))}">
+        <div class="scout-jdetail-head">
+            <span class="scout-jdetail-headlabel">${headLabel}</span>
+            ${headMeta}
+        </div>
+        ${rows.length ? `<div class="scout-jdetail-rows">${rows.join('')}</div>` : ''}
+        ${actionRow}
+    </div>`;
+}
+
+// Pops a modal with the rendered-HTML thumbnail. Click outside or Escape closes.
+function showAssetPreviewModal(assetId, assetName, assetTypeName) {
+    // De-dupe in case of double-click
+    if (document.querySelector('.scout-preview-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'scout-preview-overlay';
+    overlay.innerHTML = `
+        <div class="scout-preview-modal">
+            <div class="scout-preview-head">
+                <div class="scout-preview-title">${escHtml(assetName || 'Preview')}</div>
+                <button class="scout-preview-close" aria-label="Close">${I.close}</button>
+            </div>
+            <div class="scout-preview-body" id="scout-preview-body">
+                <div class="scout-preview-loading">${I.spinner}<span>Rendering preview…</span></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => {
+        overlay.classList.add('scout-preview-out');
+        setTimeout(() => overlay.remove(), 150);
+        document.removeEventListener('keydown', onKey);
+    };
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    overlay.querySelector('.scout-preview-close').addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKey);
+
+    fetchAssetPreview(assetId, assetTypeName, getCurrentInstance()).then(data => {
+        const body = document.getElementById('scout-preview-body');
+        if (!body) return;
+        if (data && data.image) {
+            const src = `data:image/png;base64,${data.image}`;
+            body.innerHTML = `<img class="scout-preview-img" src="${src}" alt="${escHtml(assetName || 'Preview')}">`;
+        } else {
+            body.innerHTML = `<div class="scout-preview-error">Couldn't load preview. The asset may not have a rendered HTML view.</div>`;
+        }
+    });
 }
 
 // ── Preview pane helpers ────────────────────────────────────
@@ -645,30 +1203,61 @@ function renderSearchRows() {
             const icon = getTypeIcon(r.type);
             const name = escHtml(r.name || r.Name || 'Unnamed');
             const isAssetLike = r.type === 'asset' || r.type === 'email';
+            const isJourney   = r.type === 'journey';
             const meta1 = [];
             const meta2 = [];
+            let pillsHtml = '';
             if (isAssetLike) {
-                // Line 1: type label · folder · modified date
+                // Line 1: type · folder · modified · asset ID  (+ Email ID for emails)
                 if (r.assetType) meta1.push(escHtml(r.assetType));
                 if (r.path) meta1.push(escHtml(r.path));
                 if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
-                // Line 2: created by · created date · ID
+                if (r.assetId) meta1.push(`ID: ${escHtml(String(r.assetId))}`);
+                if (r.legacyId) meta1.push(`Email ID: ${escHtml(String(r.legacyId))}`);
+                // Line 2: created by · created date
                 if (r.createdBy) meta2.push(`${escHtml(r.createdBy)}`);
                 if (r.createdDate) meta2.push(formatDate(r.createdDate));
-                if (r.assetId) meta2.push(`ID: ${escHtml(String(r.assetId))}`);
+            } else if (isJourney) {
+                // Pills row: Status · vN · HTS · channel · definitionType · trigger
+                pillsHtml = renderJourneyPills(r, 'search');
+                // Single meta line: modified date only. External key + entryMode
+                // dropped — neither is information the user actually scans for
+                // in the row preview.
+                if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
+            } else if (r.type === 'activity') {
+                // Line 1: type · folder breadcrumb · update mode (SQL/Import/Extract)
+                // Line 2: modified date
+                if (r.activityTypeLabel) meta1.push(escHtml(r.activityTypeLabel));
+                if (r.path) meta1.push(escHtml(r.path));
+                if (r.updateType) {
+                    meta1.push(`<span class="scout-result-row-pill" title="Update mode">${escHtml(r.updateType)}</span>`);
+                }
+                if (r.modifiedDate) meta2.push(formatDate(r.modifiedDate));
             } else {
                 if (r.path) meta1.push(escHtml(r.path));
                 if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
             }
-            html += `<div class="scout-result-row" data-idx="${idx}" data-type="${escHtml(r.type||'')}">
+            const isExpandedJourney = isJourney && S.journeyExpanded.has(r.id);
+            const isExpandedAsset   = isAssetLike && S.assetExpanded.has(r.id);
+            const isExpanded        = isExpandedJourney || isExpandedAsset;
+            const arrowIcon = (isJourney || isAssetLike)
+                ? (isExpanded ? I.chevDown : I.chevRight)
+                : I.chevRight;
+            html += `<div class="scout-result-row${isExpanded ? ' scout-result-row-expanded' : ''}" data-idx="${idx}" data-type="${escHtml(r.type||'')}">
                 <div class="scout-result-type-icon" style="background:${color}20;color:${color}">${icon}</div>
                 <div class="scout-result-info">
                     <div class="scout-result-row-name">${name}</div>
+                    ${pillsHtml}
                     ${meta1.length ? `<div class="scout-result-row-meta">${meta1.join(' · ')}</div>` : ''}
                     ${meta2.length ? `<div class="scout-result-row-meta" style="font-size:10px;color:var(--s-text-3);margin-top:1px;">${meta2.join(' · ')}</div>` : ''}
                 </div>
-                <span class="scout-result-row-arrow" style="opacity:${isAssetLike ? '0.45' : '1'}">${isAssetLike ? I.copy : I.chevRight}</span>
+                <span class="scout-result-row-arrow">${arrowIcon}</span>
             </div>`;
+            if (isExpandedJourney) {
+                html += renderJourneyDetail(r, S.journeyDetailState.get(r.id));
+            } else if (isExpandedAsset) {
+                html += renderAssetDetail(r);
+            }
         });
         if (hiddenCount > 0) {
             html += `<div class="scout-group-expand" data-group="${escHtml(groupKey)}" role="button" tabindex="0">${I.chevRight} Show all ${items.length} ${escHtml(label.toLowerCase())} <span class="scout-group-expand-hint">(+${hiddenCount} more)</span></div>`;
@@ -709,22 +1298,81 @@ function bindSearchRowEvents(cont) {
                 updateTabUI();
                 openAutomationDetail(item.id || item.ID, item.name || item.Name);
             } else if (item.type === 'asset' || item.type === 'email') {
-                const nameText = item.name || item.Name || '';
-                navigator.clipboard.writeText(nameText).then(() => {
-                    toast(`Copied: ${nameText}`, 'success');
-                    const arrow = row.querySelector('.scout-result-row-arrow');
-                    if (arrow) {
-                        arrow.innerHTML = I.check;
-                        arrow.style.cssText = 'color:var(--s-success);opacity:1;';
-                        setTimeout(() => {
-                            arrow.innerHTML = I.copy;
-                            arrow.style.cssText = 'opacity:0.45;';
-                        }, 1500);
-                    }
-                }).catch(() => toast('Copy failed', 'error'));
+                // Toggle inline detail expand (same pattern as journeys).
+                // Copy-name is now a button inside the expanded card.
+                if (S.assetExpanded.has(item.id)) {
+                    S.assetExpanded.delete(item.id);
+                    renderSearchResults();
+                } else {
+                    S.assetExpanded.add(item.id);
+                    // Trigger category tree fetch so the full folder path
+                    // resolves. We re-render after it loads.
+                    ensureAssetCategoryTree(getCurrentInstance())
+                        .then(() => renderSearchResults());
+                    renderSearchResults();
+                }
+            } else if (item.type === 'journey') {
+                // Toggle inline detail card. External open is a separate button
+                // inside the expanded card.
+                if (S.journeyExpanded.has(item.id)) {
+                    S.journeyExpanded.delete(item.id);
+                    renderSearchResults();
+                } else {
+                    S.journeyExpanded.add(item.id);
+                    loadJourneyDetail(item, renderSearchResults);
+                    renderSearchResults();
+                }
             } else if (item.url) {
                 window.open(item.url, '_blank');
             }
+        });
+    });
+    // ── Journey detail interactions (Open in JB, copy key, open automation) ──
+    cont.querySelectorAll('.scout-journey-detail').forEach(card => {
+        const open = card.querySelector('.scout-jdetail-open');
+        if (open) open.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const u = open.dataset.jbUrl;
+            if (u) window.open(u, '_blank');
+        });
+        card.querySelectorAll('[data-copy]').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(el.dataset.copy)
+                    .then(() => toast('Copied', 'success'))
+                    .catch(() => toast('Copy failed', 'error'));
+            });
+        });
+    });
+    // ── Asset detail interactions (Preview, View file, Copy name, mono copy) ──
+    cont.querySelectorAll('.scout-asset-detail').forEach(card => {
+        card.querySelectorAll('.scout-adetail-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                const action = link.dataset.action;
+                if (action === 'view-file') return; // <a target=_blank> handles itself
+                e.preventDefault();
+                e.stopPropagation();
+                if (action === 'preview') {
+                    showAssetPreviewModal(
+                        link.dataset.assetId,
+                        link.dataset.assetName,
+                        link.dataset.assetTypeName
+                    );
+                } else if (action === 'copy') {
+                    navigator.clipboard.writeText(link.dataset.copy || '')
+                        .then(() => toast(`Copied: ${link.dataset.copy}`, 'success'))
+                        .catch(() => toast('Copy failed', 'error'));
+                }
+            });
+        });
+        // Mono-pill click-to-copy (Email ID, File name)
+        card.querySelectorAll('[data-copy]:not(.scout-adetail-link)').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(el.dataset.copy || '')
+                    .then(() => toast('Copied', 'success'))
+                    .catch(() => toast('Copy failed', 'error'));
+            });
         });
     });
 }
@@ -1764,10 +2412,22 @@ function renderDEDetail(container) {
             </button>`).join('');
         }
         if (type === 'journeys') {
-            return items.map(j => `<div class="scout-usage-item">
-                <span class="scout-usage-item-name">${escHtml(j.name || j.key || '')}</span>
-                <span class="scout-usage-item-meta">${j.eventName ? escHtml(j.eventName) : ''}${j.version ? ' · v' + j.version : ''}</span>
-            </div>`).join('');
+            return items.map((j, ji) => {
+                const pills = renderJourneyPills(j, 'usage');
+                const trailingBits = [];
+                if (j.eventName) trailingBits.push(escHtml(j.eventName));
+                if (j.modifiedDate) trailingBits.push(formatDate(j.modifiedDate));
+                const isOpen = S.journeyExpanded.has(j.id);
+                const arrow = isOpen ? I.chevDown : I.chevRight;
+                return `<button class="scout-usage-item scout-usage-item-journey${isOpen ? ' is-open' : ''}" data-jidx="${ji}">
+                    <div class="scout-usage-item-main">
+                        <span class="scout-usage-item-name">${escHtml(j.name || j.key || '')}</span>
+                        ${pills}
+                    </div>
+                    ${trailingBits.length ? `<span class="scout-usage-item-meta">${trailingBits.join(' · ')}</span>` : ''}
+                    <span class="scout-usage-nav-arrow">${arrow}</span>
+                </button>${isOpen ? renderJourneyDetail(j, S.journeyDetailState.get(j.id)) : ''}`;
+            }).join('');
         }
         return '';
     }
@@ -1834,6 +2494,46 @@ function renderDEDetail(container) {
                 const open = detail.style.display !== 'none';
                 detail.style.display = open ? 'none' : 'block';
                 if (arrow) arrow.style.transform = open ? '' : 'rotate(180deg)';
+            });
+        });
+
+        // ── DE Usage journey rows: toggle inline detail expand ──────────────
+        const rerenderUsageJourneys = () => {
+            if (usageDiv()) { usageDiv().innerHTML = renderUsageCounts(); bindUsageInteractions(); }
+        };
+        div.querySelectorAll('.scout-usage-item-journey[data-jidx]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                // Buttons inside the expanded detail card (open in JB, copy key,
+                // open automation) should not also toggle the row.
+                if (e.target.closest('.scout-journey-detail')) return;
+                const ji = parseInt(btn.dataset.jidx, 10);
+                const j = (usageData.journeys || [])[ji];
+                if (!j) return;
+                if (S.journeyExpanded.has(j.id)) {
+                    S.journeyExpanded.delete(j.id);
+                    rerenderUsageJourneys();
+                } else {
+                    S.journeyExpanded.add(j.id);
+                    loadJourneyDetail(j, rerenderUsageJourneys);
+                    rerenderUsageJourneys();
+                }
+            });
+        });
+        // Journey detail card interactions inside the usage panel
+        div.querySelectorAll('.scout-journey-detail').forEach(card => {
+            const open = card.querySelector('.scout-jdetail-open');
+            if (open) open.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const u = open.dataset.jbUrl;
+                if (u) window.open(u, '_blank');
+            });
+            card.querySelectorAll('[data-copy]').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(el.dataset.copy)
+                        .then(() => toast('Copied', 'success'))
+                        .catch(() => toast('Copy failed', 'error'));
+                });
             });
         });
     }
@@ -2129,13 +2829,15 @@ function renderDEExport(container) {
 
 
 function renderDEReport(container) {
+    // CSV download now lives inside the generated HTML report (the blob has
+    // a "Download CSV" button in its header). Single button here.
     container.innerHTML = `
 <div class="scout-card">
     <div class="scout-card-title">${I.report} Generate DE Report</div>
     <div class="scout-form-row-flex" style="gap:8px;margin-top:12px;">
-        <button class="scout-btn scout-btn-primary" style="flex:1;" id="scout-report-html-btn">${I.report} View HTML Report</button>
-        <button class="scout-btn scout-btn-secondary" style="flex:1;" id="scout-report-csv-btn">${I.download} Export CSV</button>
+        <button class="scout-btn scout-btn-primary" id="scout-report-html-btn">${I.report} View HTML Report</button>
     </div>
+    <div class="scout-form-hint" style="margin-top:8px;font-size:11px;color:var(--s-text-3);">CSV download is available inside the generated report.</div>
     <div id="scout-report-status" class="scout-status-area"></div>
 </div>`;
 
@@ -2153,26 +2855,6 @@ function renderDEReport(container) {
             } else {
                 if (statusDiv) statusDiv.innerHTML = `<span class="scout-status-error">Failed: ${escHtml((res && res.error) || 'Unknown')}</span>`;
                 toast('Report failed', 'error');
-            }
-        });
-    });
-
-    document.getElementById('scout-report-csv-btn')?.addEventListener('click', () => {
-        const statusDiv = document.getElementById('scout-report-status');
-        if (statusDiv) statusDiv.innerHTML = `<div class="scout-loading-state">${I.spinner} Fetching DE data…</div>`;
-        chrome.runtime.sendMessage({ action: 'generateReport', format: 'csv', instance }, res => {
-            if (res && res.success && res.csv) {
-                const blob = new Blob([res.csv], { type: 'text/csv;charset=utf-8;' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const ts = new Date().toISOString().slice(0, 10);
-                a.href = url; a.download = `sfmc-de-report-${ts}.csv`; a.click();
-                URL.revokeObjectURL(url);
-                if (statusDiv) statusDiv.innerHTML = `<span class="scout-status-success">${I.check} Exported ${res.count} DEs to CSV.</span>`;
-                toast('Exported ' + res.count + ' DEs to CSV', 'success');
-            } else {
-                if (statusDiv) statusDiv.innerHTML = `<span class="scout-status-error">Failed: ${escHtml((res && res.error) || 'Unknown')}</span>`;
-                toast('CSV export failed', 'error');
             }
         });
     });
@@ -2223,10 +2905,15 @@ function activityTypeBadge(typeName) {
     return `<span class="badge" style="background:${c}22;color:${c}">${escHtml(typeName)}</span>`;
 }
 
-function reportHtmlShell(title, count, instance, rows, columns, extraCss, logoDataUrl, theme) {
+function reportHtmlShell(title, count, instance, rows, columns, extraCss, logoDataUrl, theme, csvData) {
     const ts = new Date().toLocaleString();
     const isLight = (theme || S.theme) === 'light';
     const colHeaders = columns.map(c => `<th data-col="${c.idx}" style="${c.align==='right'?'text-align:right':''}">${escHtml(c.label)}</th>`).join('');
+    // CSV download — embed the structured data as JSON in the page so the
+    // download button can build the CSV client-side without round-tripping
+    // back to the extension. < escape prevents </script> injection.
+    const csvSafe = csvData ? JSON.stringify(csvData).replace(/</g, '\\u003c') : 'null';
+    const csvFileName = `${title.replace(/[^A-Za-z0-9]+/g, '_')}_${ts.replace(/[^0-9]/g, '').slice(0, 12)}.csv`;
     // Theme-aware CSS variables
     const vars = isLight
         ? `--bg:#F3F2F2;--bg2:#FFFFFF;--surface:#FFFFFF;--surf2:#F9F8F7;--border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.12);--text:#032D60;--text2:#3E3E3C;--text3:#706E6B;--accent:#0176D3;--success:#04844B;--error:#C23934;--warning:#DD7A01;--th-bg:#F9F8F7;--th-hover:#F0EFEE;--td-hover:rgba(1,118,211,0.05);`
@@ -2267,6 +2954,10 @@ tr:hover td{background:var(--td-hover);}
 ::-webkit-scrollbar{width:6px;height:6px;}
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--surf2);border-radius:3px;}
+#report-csv-btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border:none;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s;}
+#report-csv-btn:hover{opacity:.88;}
+#report-csv-btn:active{transform:translateY(1px);}
+#report-csv-btn svg{flex-shrink:0;}
 ${extraCss||''}
 </style></head><body>
 <div class="report-header">
@@ -2277,6 +2968,7 @@ ${extraCss||''}
     <span><strong>Generated:</strong> ${escHtml(ts)}</span>
     <span><strong>Total:</strong> ${count}</span>
   </div>
+  ${csvData ? `<button id="report-csv-btn" type="button" title="Download as CSV"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20H18"/><path d="M12 4V16M12 16L15.5 12.5M12 16L8.5 12.5"/></svg>Download CSV</button>` : ''}
 </div>
 <div class="report-body">
 <div class="search-wrap"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="M20 20L17 17"/></svg>
@@ -2286,6 +2978,20 @@ ${extraCss||''}
 <tbody>${rows}</tbody>
 </table></div></div>
 <script>
+const _csvData=${csvSafe};
+const _csvFileName=${JSON.stringify(csvFileName)};
+function _downloadCsv(){
+  if(!_csvData)return;
+  const escape=v=>{const s=v==null?'':String(v);return /[",\\n\\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  const lines=[_csvData.headers.map(escape).join(',')];
+  for(const r of (_csvData.rows||[]))lines.push(r.map(escape).join(','));
+  const blob=new Blob(['﻿'+lines.join('\\r\\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=_csvFileName;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},100);
+}
+document.getElementById('report-csv-btn')?.addEventListener('click',_downloadCsv);
 document.getElementById('search-input').addEventListener('input',function(){
   const q=this.value.toLowerCase();
   document.querySelectorAll('tbody tr').forEach(tr=>{tr.classList.toggle('hidden-row',q?!tr.textContent.toLowerCase().includes(q):false);});
@@ -2356,9 +3062,68 @@ async function generateAutomationsReport(statusEl) {
                 description: a.description || leg.description || '',
                 _scheduleTypeName: (schedObj && schedObj.scheduleTypeName) || '',
                 _folderPath: a.categoryPath || a.folderPath || leg.categoryPath || leg.folderPath || '',
-                _stepCount: a.stepCount != null ? a.stepCount : (Array.isArray(a.steps) ? a.steps.length : (leg.activityCount != null ? leg.activityCount : ''))
+                _stepCount: a.stepCount != null ? a.stepCount : (Array.isArray(a.steps) ? a.steps.length : (leg.activityCount != null ? leg.activityCount : '')),
+                // The legacy gridView items have an `id` field that is the
+                // LEGACY NUMERIC id — different from v1's GUID `a.id`. This
+                // is the id the legacy bulk endpoint
+                // `legacy/v1/beta/bulk/automations/automation/definition/{id}`
+                // accepts (passing the GUID returns 400 InvalidParameter).
+                _legacyId: leg.id != null ? leg.id : (leg.legacyId != null ? leg.legacyId : null)
             };
         });
+        // Hydrate folder + step count by mirroring exactly what the in-panel
+        // automation detail view does (see openAutomationDetail at the v1
+        // fetch + legacy-bulk enrichment block). Two calls per automation:
+        //
+        //   1. `automation/v1/automations/{GUID}` — for `steps[]` count.
+        //   2. `legacy/v1/beta/bulk/automations/automation/definition/{LEGACY_NUMERIC_ID}`
+        //      — for `def.folderPath || def.categoryPath`.
+        //
+        // The legacy bulk endpoint REQUIRES the legacy numeric id (not the
+        // v1 GUID, which 400s with "Definition_ID could not be parsed").
+        // The legacy gridView list we already fetched contains the numeric
+        // id for each automation — `_legacyId` was set during the merge step
+        // by joining on `key` (the GUID that BOTH v1 and legacy list share).
+        if (statusEl) statusEl.innerHTML = `<div class="scout-loading-state">${I.spinner} Enriching ${allAutos.length} automations…</div>`;
+
+        const BATCH = 10;
+        for (let i = 0; i < allAutos.length; i += BATCH) {
+            const slice = allAutos.slice(i, i + BATCH);
+            await Promise.allSettled(slice.map(async (a) => {
+                if (!a.id) return;
+                const [v1Res, legRes] = await Promise.allSettled([
+                    // v1 detail with the GUID — for steps count.
+                    sfmcFetch(
+                        `https://${instance}.exacttarget.com/cloud/fuelapi/automation/v1/automations/${a.id}`,
+                        'GET', { 'accept': 'application/json' }
+                    ),
+                    // Legacy bulk with the NUMERIC id — for folderPath.
+                    // Skip when we don't have a numeric id (rare).
+                    a._legacyId != null
+                        ? sfmcFetch(
+                            `https://${instance}.exacttarget.com/cloud/fuelapi/legacy/v1/beta/bulk/automations/automation/definition/${a._legacyId}`,
+                            'GET', { 'accept': 'application/json' }
+                          )
+                        : Promise.resolve(null)
+                ]);
+                const v1  = v1Res.status === 'fulfilled' ? v1Res.value : null;
+                const leg = legRes.status === 'fulfilled' ? legRes.value : null;
+
+                // Step count — `steps` (current) OR `automationProcesses` (legacy).
+                if ((a._stepCount === '' || a._stepCount == null) && v1) {
+                    const procs = Array.isArray(v1.steps) ? v1.steps
+                                : Array.isArray(v1.automationProcesses) ? v1.automationProcesses
+                                : null;
+                    if (procs) a._stepCount = procs.length;
+                }
+                // Folder path — exact same parse logic the detail view uses.
+                if (!a._folderPath && leg) {
+                    const def = leg.definition || leg.automation || (Array.isArray(leg.items) ? leg.items[0] : null) || leg;
+                    const fp = def && (def.folderPath || def.categoryPath);
+                    if (fp) a._folderPath = String(fp);
+                }
+            }));
+        }
         const cols = [
             { idx:0, label:'Name' }, { idx:1, label:'Status' },
             { idx:2, label:'Key', align:'mono' }, { idx:3, label:'Last Run' },
@@ -2374,16 +3139,27 @@ async function generateAutomationsReport(statusEl) {
 <td class="mono">${escHtml(a.key||a.automationKey||'—')}</td>
 <td>${escHtml(formatDate(a.lastRunTime||a.lastRun||''))}</td>
 <td>${escHtml(a._scheduleTypeName||'')}</td>
-<td style="text-align:right">${a._stepCount !== '' ? a._stepCount : '—'}</td>
-<td style="max-width:150px">${escHtml(a._folderPath||'')}</td>
+<td style="text-align:right">${a._stepCount !== '' && a._stepCount != null ? a._stepCount : '—'}</td>
+<td style="max-width:200px" title="${escHtml(a._folderPath||'')}">${escHtml(a._folderPath||'—')}</td>
 <td>${escHtml(a._createdBy||'')}</td>
 <td style="max-width:180px">${escHtml((a.description||'').substring(0,80))}</td>
 <td>${escHtml(formatDate(a.createdDate||a.createDate||''))}</td>
 <td>${escHtml(formatDate(a.modifiedDate||a.lastSaveDate||''))}</td>
 </tr>`;
         }).join('');
+        const csvData = {
+            headers: ['Name', 'Status', 'Key', 'Last Run', 'Schedule', 'Steps', 'Folder', 'Created By', 'Description', 'Created', 'Modified', 'ID'],
+            rows: allAutos.map(a => [
+                a.name || '', a.status || a.statusName || '',
+                a.key || a.automationKey || '', a.lastRunTime || a.lastRun || '',
+                a._scheduleTypeName || '', a._stepCount != null ? a._stepCount : '',
+                a._folderPath || '', a._createdBy || '',
+                a.description || '', a.createdDate || a.createDate || '',
+                a.modifiedDate || a.lastSaveDate || '', a.id || ''
+            ])
+        };
         const logoUrl = await getLogoDataUrl();
-        const html = reportHtmlShell('Automations Report', allAutos.length, instance, rows || '<tr><td colspan="11" style="text-align:center;padding:30px;color:#64748B;">No automations found.</td></tr>', cols, '', logoUrl);
+        const html = reportHtmlShell('Automations Report', allAutos.length, instance, rows || '<tr><td colspan="11" style="text-align:center;padding:30px;color:#64748B;">No automations found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
         openBlobReport(html);
         if (statusEl) statusEl.innerHTML = `<span class="scout-status-success">${I.check} ${allAutos.length} automations exported.</span>`;
     } catch (e) {
@@ -2406,24 +3182,78 @@ async function generateJourneysReport(statusEl) {
             page++;
             if (page > 10) break;
         }
+        // Bulk-fetch all eventDefinitions in a single paginated call so we can
+        // resolve dataExtensionName for the Entry DE column. The trigger
+        // metaData on journeys only contains `eventDefinitionId` — the actual
+        // DE name lives on the eventDefinition record. Same pattern as
+        // DEUsageHandler's journey lookup.
+        const evDefIndex = {};
+        try {
+            const evBulk = await sfmcFetch(`https://${instance}.exacttarget.com/cloud/fuelapi/interaction/v1/eventDefinitions?$sort=createdDate%20desc&$pageSize=1000&$page=1`);
+            for (const ev of ((evBulk && evBulk.items) || [])) {
+                if (ev.id) evDefIndex[ev.id.toLowerCase()] = ev;
+                if (ev.eventDefinitionKey) evDefIndex[ev.eventDefinitionKey] = ev;
+            }
+        } catch (_) { /* report still works without DE resolution */ }
+        const resolveEntryDe = (j) => {
+            const trig = (j.triggers && j.triggers[0]) || {};
+            const tMeta = trig.metaData || {};
+            // Some triggers carry dataExtensionName/Id inline — happens on a
+            // minority. Most need the eventDef join.
+            if (tMeta.dataExtensionName) return tMeta.dataExtensionName;
+            const evId = tMeta.eventDefinitionId;
+            if (evId) {
+                const ev = evDefIndex[evId.toLowerCase()];
+                if (ev) return ev.dataExtensionName || (ev.arguments && ev.arguments.dataExtensionName) || '';
+            }
+            return '';
+        };
+        // Columns chosen for an at-a-glance audit: who, what state, scale, type.
+        // Dropped Key (external GUID) + Created (redundant w/ Modified) — neither
+        // is something readers scan a report for. Added HTS / Trigger Type /
+        // Population — operational signals that match the detail-card pills.
         const cols = [
-            { idx:0, label:'Name' }, { idx:1, label:'Status' },
-            { idx:2, label:'Key', align:'mono' }, { idx:3, label:'Version', align:'right' },
-            { idx:4, label:'Channel' }, { idx:5, label:'Created' }, { idx:6, label:'Modified' }
+            { idx:0, label:'Name' },
+            { idx:1, label:'Status' },
+            { idx:2, label:'v', align:'right' },
+            { idx:3, label:'HTS', align:'center' },
+            { idx:4, label:'Trigger' },
+            { idx:5, label:'Entry DE' },
+            { idx:6, label:'Population', align:'right' },
+            { idx:7, label:'Channel' },
+            { idx:8, label:'Modified' }
         ];
-        const rows = allJ.map(j => {
+        const enriched = allJ.map(j => {
+            const trig = (j.triggers && j.triggers[0]) || {};
+            const hts = !!(j.metaData && j.metaData.highThroughputSending && j.metaData.highThroughputSending.email);
+            const pop = j.stats && typeof j.stats.cumulativePopulation === 'number' ? j.stats.cumulativePopulation : null;
+            const entryDe = resolveEntryDe(j);
+            const channel = j.channel || j.definitionType || '';
+            return { j, trig, hts, pop, entryDe, channel };
+        });
+        const rows = enriched.map(({ j, trig, hts, pop, entryDe, channel }) => {
             return `<tr>
 <td title="${escHtml(j.name||'')}">${escHtml(j.name||'—')}</td>
 <td>${reportStatusBadge(j.status||'')}</td>
-<td class="mono">${escHtml(j.key||'—')}</td>
 <td style="text-align:right">${j.version||'—'}</td>
-<td>${escHtml(j.channel||j.definitionType||'—')}</td>
-<td>${escHtml(formatDate(j.createdDate||''))}</td>
+<td style="text-align:center">${hts ? '<span style="font-size:10px;background:rgba(1,118,211,0.15);color:#0176D3;border:1px solid rgba(1,118,211,0.3);padding:1px 6px;border-radius:9px;font-weight:600;letter-spacing:0.04em">HTS</span>' : '—'}</td>
+<td>${escHtml(trig.type || '—')}</td>
+<td title="${escHtml(entryDe)}">${escHtml(entryDe || '—')}</td>
+<td style="text-align:right" class="mono">${pop !== null ? pop.toLocaleString() : '—'}</td>
+<td>${escHtml(channel || '—')}</td>
 <td>${escHtml(formatDate(j.modifiedDate||j.lastModifiedDate||''))}</td>
 </tr>`;
         }).join('');
+        const csvData = {
+            headers: ['Name', 'Status', 'Version', 'HTS', 'Trigger', 'Entry DE', 'Population', 'Channel', 'Modified', 'Interaction ID'],
+            rows: enriched.map(({ j, trig, hts, pop, entryDe, channel }) => [
+                j.name || '', j.status || '', j.version || '', hts ? 'Yes' : '',
+                trig.type || '', entryDe || '', pop != null ? pop : '',
+                channel || '', j.modifiedDate || j.lastModifiedDate || '', j.id || ''
+            ])
+        };
         const logoUrl = await getLogoDataUrl();
-        const html = reportHtmlShell('Journeys Report', allJ.length, instance, rows || '<tr><td colspan="7" style="text-align:center;padding:30px;color:#64748B;">No journeys found.</td></tr>', cols, '', logoUrl);
+        const html = reportHtmlShell('Journeys Report', allJ.length, instance, rows || '<tr><td colspan="9" style="text-align:center;padding:30px;color:#64748B;">No journeys found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
         openBlobReport(html);
         if (statusEl) statusEl.innerHTML = `<span class="scout-status-success">${I.check} ${allJ.length} journeys exported.</span>`;
     } catch (e) {
@@ -2436,18 +3266,16 @@ async function generateJourneysReport(statusEl) {
 async function generateAssetsReport(statusEl) {
     if (statusEl) statusEl.innerHTML = `<div class="scout-loading-state">${I.spinner} Fetching assets…</div>`;
     try {
-        // Get the freshest CB token from storage (may have been captured after panel opened)
-        const freshCbToken = await new Promise(resolve => {
-            chrome.runtime.sendMessage({ type: 'GET_TOKENS' }, res => {
-                resolve(res && res.tokens ? (res.tokens.cbToken || res.tokens.pageHookToken || S.pageHookToken || '') : (S.pageHookToken || ''));
-            });
-        });
+        // Use the cookie-only proxy at mc.{stack}.exacttarget.com instead of
+        // the CSRF-required content-builder.{stack}.marketingcloudapps.com.
+        // The old CSRF flow was breaking with 403 EBADCSRFTOKEN whenever the
+        // stored token went stale. Same endpoint shape; no token needed.
         let allA = [], page = 1;
         while (true) {
             const d = await sfmcFetch(
-                `https://content-builder.${stack}.marketingcloudapps.com/fuelapi/asset/v1/content/assets/query?scope=ours`,
+                `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/assets/query?scope=ours`,
                 'POST',
-                { 'x-csrf-token': freshCbToken },
+                {},
                 { page: { page, pageSize: 500 } }
             );
             const items = d && (d.items || []);
@@ -2457,31 +3285,80 @@ async function generateAssetsReport(statusEl) {
             page++;
             if (page > 20) break;
         }
+        // Fetch the full category tree once so we can render the full folder
+        // breadcrumb ("Content Builder / Email / API_Email") instead of just
+        // the leaf folder name. SFMC's UI uses the same idea.
+        const catMap = new Map();
+        try {
+            const catRes = await sfmcFetch(
+                `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories?$page=1&$pagesize=500`
+            );
+            for (const c of (catRes && catRes.items || [])) {
+                if (c && c.id != null) catMap.set(String(c.id), c);
+            }
+        } catch (_) { /* fall back to leaf-only path if categories endpoint errors */ }
+        const buildAssetPath = (catId, fallback) => {
+            if (!catId) return fallback || '';
+            const segs = [];
+            let id = String(catId);
+            const seen = new Set();
+            let depth = 0;
+            while (id && id !== '0' && !seen.has(id) && depth < 20) {
+                seen.add(id);
+                const c = catMap.get(id);
+                if (!c) break;
+                segs.unshift(c.name);
+                id = c.parentId != null ? String(c.parentId) : null;
+                depth++;
+            }
+            return segs.length ? segs.join(' / ') : (fallback || '');
+        };
+
         const cols = [
             { idx:0, label:'Name' }, { idx:1, label:'Type' }, { idx:2, label:'Status' },
-            { idx:3, label:'ID', align:'right' }, { idx:4, label:'Customer Key', align:'mono' },
-            { idx:5, label:'Folder' }, { idx:6, label:'Created By' },
-            { idx:7, label:'Created' }, { idx:8, label:'Modified' }
+            { idx:3, label:'ID', align:'right' }, { idx:4, label:'Email ID', align:'right' },
+            { idx:5, label:'Customer Key', align:'mono' },
+            { idx:6, label:'Folder' }, { idx:7, label:'Created By' },
+            { idx:8, label:'Created' }, { idx:9, label:'Modified' }
         ];
-        const rows = allA.map(a => {
+        const enriched = allA.map(a => {
             const type = a.assetType ? (a.assetType.displayName || a.assetType.name || '') : '';
-            const folder = a.category ? a.category.name : '';
+            const folder = buildAssetPath(a.category ? a.category.id : null, a.category ? a.category.name : '');
             const owner = a.owner ? (a.owner.name || a.owner.userName || '') : '';
             const assetStatusRaw = a.status ? (typeof a.status === 'object' ? (a.status.name || '') : String(a.status)) : '';
+            const emailLegacyId = a.data && a.data.email && a.data.email.legacy
+                ? a.data.email.legacy.legacyId : null;
+            const pubUrl = a.fileProperties && a.fileProperties.publishedURL ? a.fileProperties.publishedURL : null;
+            return { a, type, folder, owner, assetStatusRaw, emailLegacyId, pubUrl };
+        });
+        const rows = enriched.map(({ a, type, folder, owner, assetStatusRaw, emailLegacyId, pubUrl }) => {
+            const nameCell = pubUrl
+                ? `<a href="${escHtml(pubUrl)}" target="_blank" style="color:inherit;text-decoration:underline;text-decoration-color:rgba(127,127,127,0.4);text-underline-offset:2px;">${escHtml(a.name||'—')}</a>`
+                : escHtml(a.name||'—');
             return `<tr>
-<td title="${escHtml(a.name||'')}">${escHtml(a.name||'—')}</td>
+<td title="${escHtml(a.name||'')}">${nameCell}</td>
 <td>${escHtml(type)}</td>
 <td>${reportStatusBadge(assetStatusRaw)}</td>
 <td style="text-align:right" class="mono">${a.id||'—'}</td>
+<td style="text-align:right" class="mono">${emailLegacyId != null ? escHtml(String(emailLegacyId)) : '—'}</td>
 <td class="mono">${escHtml(a.customerKey||'—')}</td>
-<td>${escHtml(folder)}</td>
+<td>${escHtml(folder || '—')}</td>
 <td>${escHtml(owner)}</td>
 <td>${escHtml(formatDate(a.createdDate||a.createdOn||''))}</td>
 <td>${escHtml(formatDate(a.modifiedDate||a.lastModifiedDate||''))}</td>
 </tr>`;
         }).join('');
+        const csvData = {
+            headers: ['Name', 'Type', 'Status', 'ID', 'Email ID', 'Customer Key', 'Folder', 'Created By', 'Created', 'Modified', 'Published URL'],
+            rows: enriched.map(({ a, type, folder, owner, assetStatusRaw, emailLegacyId, pubUrl }) => [
+                a.name || '', type, assetStatusRaw, a.id || '', emailLegacyId || '',
+                a.customerKey || '', folder, owner,
+                a.createdDate || a.createdOn || '', a.modifiedDate || a.lastModifiedDate || '',
+                pubUrl || ''
+            ])
+        };
         const logoUrl = await getLogoDataUrl();
-        const html = reportHtmlShell('Assets Report', allA.length, instance, rows || '<tr><td colspan="9" style="text-align:center;padding:30px;color:#64748B;">No assets found.</td></tr>', cols, '', logoUrl);
+        const html = reportHtmlShell('Assets Report', allA.length, instance, rows || '<tr><td colspan="10" style="text-align:center;padding:30px;color:#64748B;">No assets found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
         openBlobReport(html);
         if (statusEl) statusEl.innerHTML = `<span class="scout-status-success">${I.check} ${allA.length} assets exported.</span>`;
     } catch (e) {
@@ -2514,10 +3391,41 @@ async function generateActivitiesReport(statusEl) {
             ...gather(fileXferData, 'File Transfer'),
             ...gather(dataExtractData, 'Data Extract')
         ];
+        // Hydrate folder + updateType per-row via parallel ?view=categoryinfo
+        // (same trick the activity search uses). HTTP/2 multiplexes, so wall
+        // cost ≈ one extra request even for ~hundreds of activities.
+        const TYPE_PATH = {
+            'SQL Query':      'queries',
+            'Script':         'scripts',
+            'Filter':         'filters',
+            'Send Email':     null,  // emailsenddefinition is on a different base
+            'Import':         'imports',
+            'File Transfer':  'filetransfers',
+            'Data Extract':   'dataextracts'
+        };
+        if (statusEl) statusEl.innerHTML = `<div class="scout-loading-state">${I.spinner} Enriching ${allActs.length} activities…</div>`;
+        await Promise.allSettled(allActs.map(async (a) => {
+            const k = a.queryDefinitionId || a.id || a.key || a.customerKey || a.CustomerKey;
+            if (!k) return;
+            let url;
+            if (a._type === 'Send Email') {
+                url = `${base}/messaging-internal/v1/emailsenddefinition/${k}?view=categoryinfo`;
+            } else if (TYPE_PATH[a._type]) {
+                url = `${base}/automation/v1/${TYPE_PATH[a._type]}/${k}?view=categoryinfo`;
+            } else return;
+            try {
+                const d = await sfmcFetch(url);
+                if (!d) return;
+                if (d.folderLocationText) a._folderPath = String(d.folderLocationText).replace(/\//g, ' / ');
+                if (d.targetUpdateTypeName) a._updateType = d.targetUpdateTypeName;
+            } catch (_) {}
+        }));
+
         const cols = [
             { idx:0, label:'Name' }, { idx:1, label:'Type' },
             { idx:2, label:'Key', align:'mono' }, { idx:3, label:'Target DE' },
-            { idx:4, label:'Description' }, { idx:5, label:'Modified' }
+            { idx:4, label:'Update Type' }, { idx:5, label:'Folder' },
+            { idx:6, label:'Description' }, { idx:7, label:'Modified' }
         ];
         const rows = allActs.map(a => {
             const target = getActivityTarget(a);
@@ -2526,12 +3434,24 @@ async function generateActivitiesReport(statusEl) {
 <td>${activityTypeBadge(a._type)}</td>
 <td class="mono">${escHtml(a.key||a.customerKey||a.CustomerKey||'—')}</td>
 <td>${escHtml(target)}</td>
+<td>${escHtml(a._updateType || a.targetUpdateTypeName || '—')}</td>
+<td style="max-width:200px" title="${escHtml(a._folderPath||'')}">${escHtml(a._folderPath || '—')}</td>
 <td style="max-width:200px">${escHtml(((a.description||a.Description||'').substring(0,100)))}</td>
 <td>${escHtml(formatDate(a.modifiedDate||a.lastModifiedDate||a.ModifiedDate||''))}</td>
 </tr>`;
         }).join('');
+        const csvData = {
+            headers: ['Name', 'Type', 'Key', 'Target DE', 'Update Type', 'Folder', 'Description', 'Modified'],
+            rows: allActs.map(a => [
+                a.name || a.Name || '', a._type || '',
+                a.key || a.customerKey || a.CustomerKey || '',
+                getActivityTarget(a), a._updateType || a.targetUpdateTypeName || '',
+                a._folderPath || '', a.description || a.Description || '',
+                a.modifiedDate || a.lastModifiedDate || a.ModifiedDate || ''
+            ])
+        };
         const logoUrl = await getLogoDataUrl();
-        const html = reportHtmlShell('Activities Report', allActs.length, instance, rows || '<tr><td colspan="6" style="text-align:center;padding:30px;color:#64748B;">No activities found.</td></tr>', cols, '', logoUrl);
+        const html = reportHtmlShell('Activities Report', allActs.length, instance, rows || '<tr><td colspan="8" style="text-align:center;padding:30px;color:#64748B;">No activities found.</td></tr>', cols, '', logoUrl, S.theme, csvData);
         openBlobReport(html);
         if (statusEl) statusEl.innerHTML = `<span class="scout-status-success">${I.check} ${allActs.length} activities exported.</span>`;
     } catch (e) {
@@ -2581,14 +3501,19 @@ async function openActivityDetail(act) {
     const key = act.key || act.customerKey || act.CustomerKey;
     let data = null;
     try {
+        // `?view=categoryinfo` is the magic param — adds `folderLocationText`
+        // (full breadcrumb like "Query/Production Team/Aldorino/X") and
+        // `targetUpdateTypeName` (Overwrite/Append/Update/Update Add) to the
+        // response. SFMC's UI uses the same param. Confirmed working on SQL
+        // queries via HAR; other activity types accept it too.
         const endpointMap = {
-            'SQL Query': `${base}/automation/v1/queries/${key}`,
-            'Script': `${base}/automation/v1/scripts/${key}`,
-            'Filter': `${base}/automation/v1/filters/${key}`,
-            'Import': `${base}/automation/v1/imports/${key}`,
-            'File Transfer': `${base}/automation/v1/filetransfers/${key}`,
-            'Data Extract': `${base}/automation/v1/dataextracts/${key}`,
-            'Send Email': `${base}/messaging-internal/v1/emailsenddefinition/${key}`
+            'SQL Query': `${base}/automation/v1/queries/${key}?view=categoryinfo`,
+            'Script': `${base}/automation/v1/scripts/${key}?view=categoryinfo`,
+            'Filter': `${base}/automation/v1/filters/${key}?view=categoryinfo`,
+            'Import': `${base}/automation/v1/imports/${key}?view=categoryinfo`,
+            'File Transfer': `${base}/automation/v1/filetransfers/${key}?view=categoryinfo`,
+            'Data Extract': `${base}/automation/v1/dataextracts/${key}?view=categoryinfo`,
+            'Send Email': `${base}/messaging-internal/v1/emailsenddefinition/${key}?view=categoryinfo`
         };
         if (key && endpointMap[act._type]) data = await sfmcFetch(endpointMap[act._type]);
     } catch (_) {}
@@ -2609,50 +3534,102 @@ function renderActivityDetail(container) {
         ? `https://${instance}.exacttarget.com/cloud/#app/Automation%20Studio/AutomationStudioFuel3/%23ActivityDetails/${actTypeId}/${actObjId}`
         : null;
 
+    // Activity body renders with the SAME shape as the automation tab's
+    // step-code viewer: `.scout-code-block` for SQL/SSJS (uses highlightSQL /
+    // highlightJavaScript + Copy button), `.scout-activity-meta-panel` +
+    // `.scout-meta-table` for metadata-only activities (Send Email, Import,
+    // Data Extract, File Transfer). Don't inline-style this — panel.css owns
+    // both themes (light + dark) for these classes and they need to match the
+    // automation tab visually.
     let contentBlock = '';
     if (!loading) {
         const queryText = merged.queryText || merged.query || '';
         const scriptText = merged.script || merged.scriptText || merged.content || '';
-        const preStyle = `font-family:monospace;font-size:12px;color:var(--s-text-2);background:var(--s-bg-2);border:1px solid var(--s-border);padding:10px 12px;border-radius:6px;overflow-x:auto;white-space:pre-wrap;max-height:320px;overflow-y:auto;margin:0;line-height:1.6;`;
-        const labelStyle = `font-size:10px;color:var(--s-text-3);margin-top:12px;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;`;
+
+        const codeBlock = (codeText, langLabel, language) => {
+            const highlighted = language === 'sql'
+                ? highlightSQL(codeText)
+                : (language === 'javascript' || language === 'ssjs')
+                    ? highlightJavaScript(codeText)
+                    : escHtml(codeText);
+            return `<div class="scout-code-block">
+                <div class="scout-code-header">
+                    <span class="scout-code-lang">${escHtml(langLabel)}</span>
+                    <button class="scout-code-copy">${I.copy} Copy</button>
+                </div>
+                <span class="scout-code-text" style="display:none;">${escHtml(codeText)}</span>
+                <div class="scout-code-highlighted">${highlighted}</div>
+            </div>`;
+        };
+
+        // Build a metadata-only panel using the same `.scout-meta-table` shape
+        // the automation tab uses for non-code activities.
+        const metaPanel = (typeName, rows) => {
+            const filtered = rows.filter(([, v]) => v !== null && v !== undefined && v !== '');
+            if (!filtered.length) return '';
+            const tableRows = filtered
+                .map(([k, v]) => `<tr><td>${escHtml(k)}</td><td>${escHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))}</td></tr>`)
+                .join('');
+            return `<div class="scout-activity-meta-panel">
+                <div class="scout-activity-meta-heading"><span class="scout-activity-type-badge">${escHtml(typeName)}</span> ${escHtml(act.name || act.Name || '')}</div>
+                ${merged.description || merged.Description ? `<div class="scout-activity-desc">${escHtml(merged.description || merged.Description || '')}</div>` : ''}
+                <table class="scout-meta-table">${tableRows}</table>
+            </div>`;
+        };
+
         if (act._type === 'SQL Query' && queryText) {
-            contentBlock = `<div style="${labelStyle}">SQL Query</div><pre style="${preStyle}">${escHtml(queryText)}</pre>`;
+            contentBlock = codeBlock(queryText, 'SQL', 'sql');
         } else if (act._type === 'Script' && scriptText) {
-            contentBlock = `<div style="${labelStyle}">Script (SSJS)</div><pre style="${preStyle}">${escHtml(scriptText)}</pre>`;
+            contentBlock = codeBlock(scriptText, 'SSJS', 'ssjs');
         } else if (act._type === 'Send Email') {
             const emailName = merged.email ? (merged.email.name || merged.email.emailName || '') : (merged.emailName || '');
             const listName = merged.list ? (merged.list.listName || merged.list.name || '') : '';
             const fromName = merged.fromName || merged.senderName || '';
             const fromEmail = merged.fromEmail || merged.senderEmail || '';
-            if (emailName || listName || fromName) {
-                contentBlock = `<div style="${labelStyle}">Send Email Details</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;margin-top:4px;">
-${emailName ? `<div><span style="color:var(--s-text-3)">Email</span><br><span style="color:var(--s-text-2);">${escHtml(emailName)}</span></div>` : ''}
-${listName ? `<div><span style="color:var(--s-text-3)">List</span><br><span style="color:var(--s-text-2);">${escHtml(listName)}</span></div>` : ''}
-${fromName ? `<div><span style="color:var(--s-text-3)">From Name</span><br><span style="color:var(--s-text-2);">${escHtml(fromName)}</span></div>` : ''}
-${fromEmail ? `<div><span style="color:var(--s-text-3)">From Email</span><br><span style="color:var(--s-text-2);">${escHtml(fromEmail)}</span></div>` : ''}
-</div>`;
-            }
+            contentBlock = metaPanel('Send Email', [
+                ['Email', emailName],
+                ['List', listName],
+                ['From Name', fromName],
+                ['From Email', fromEmail]
+            ]);
         } else if (act._type === 'Import') {
             const sourceType = merged.fileTransferLocation ? merged.fileTransferLocation.name : (merged.sourceObjectName || merged.fileLocation || '');
             const updateType = merged.updateType || merged.updateTypeId || '';
-            if (sourceType || updateType) {
-                contentBlock = `<div style="${labelStyle}">Import Details</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;margin-top:4px;">
-${sourceType ? `<div><span style="color:var(--s-text-3)">File Location</span><br><span style="color:var(--s-text-2);">${escHtml(String(sourceType))}</span></div>` : ''}
-${updateType ? `<div><span style="color:var(--s-text-3)">Update Type</span><br><span style="color:var(--s-text-2);">${escHtml(String(updateType))}</span></div>` : ''}
-</div>`;
-            }
+            const destDE = (merged.destination && (merged.destination.name || merged.destination.objectName)) || merged.destinationObjectName || '';
+            const fileNamingPattern = merged.fileNamingPattern || merged.filenamingpattern || '';
+            contentBlock = metaPanel('Import', [
+                ['File Location', sourceType],
+                ['Update Type', updateType],
+                ['Destination DE', destDE],
+                ['File Pattern', fileNamingPattern]
+            ]);
         } else if (act._type === 'Data Extract') {
             const extractType = merged.extractDefinitionType || merged.dataExtractTypeId || '';
             const filePattern = merged.fileSpec || merged.fileNamingPattern || '';
-            if (extractType || filePattern) {
-                contentBlock = `<div style="${labelStyle}">Data Extract Details</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;margin-top:4px;">
-${extractType ? `<div><span style="color:var(--s-text-3)">Extract Type</span><br><span style="color:var(--s-text-2);">${escHtml(String(extractType))}</span></div>` : ''}
-${filePattern ? `<div><span style="color:var(--s-text-3)">File Pattern</span><br><span style="color:var(--s-text-2);">${escHtml(String(filePattern))}</span></div>` : ''}
-</div>`;
-            }
+            const additionalInfo = merged.additionalInfo || '';
+            contentBlock = metaPanel('Data Extract', [
+                ['Extract Type', extractType],
+                ['File Pattern', filePattern],
+                ['Additional Info', additionalInfo]
+            ]);
+        } else if (act._type === 'File Transfer') {
+            const direction = merged.fileTransferDirection || merged.direction || '';
+            const location = (merged.fileTransferLocation && merged.fileTransferLocation.name) || merged.fileLocation || '';
+            const fileNamingPattern = merged.fileNamingPattern || merged.filenamingpattern || '';
+            contentBlock = metaPanel('File Transfer', [
+                ['Direction', direction],
+                ['Location', location],
+                ['File Pattern', fileNamingPattern]
+            ]);
+        } else if (act._type === 'Filter') {
+            const sourceDE = (merged.sourceObject && merged.sourceObject.name) || merged.sourceObjectName || '';
+            const destDE = (merged.destinationObject && merged.destinationObject.name) || merged.destinationObjectName || '';
+            const filterDef = merged.filterDefinitionId || merged.filterActivityDefinitionId || '';
+            contentBlock = metaPanel('Filter', [
+                ['Source DE', sourceDE],
+                ['Destination DE', destDE],
+                ['Filter Definition ID', filterDef]
+            ]);
         }
     }
 
@@ -2669,6 +3646,8 @@ ${filePattern ? `<div><span style="color:var(--s-text-3)">File Pattern</span><br
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;margin-top:10px;">
         <div><span style="color:var(--s-text-3)">Key</span><br><span style="font-family:monospace;font-size:11px;color:var(--s-text-2);">${escHtml(key)}</span></div>
         ${target ? `<div><span style="color:var(--s-text-3)">Target DE</span><br><strong style="color:var(--s-text-1);">${escHtml(target)}</strong></div>` : ''}
+        ${merged.targetUpdateTypeName ? `<div><span style="color:var(--s-text-3)">Update Type</span><br><strong style="color:var(--s-text-1);">${escHtml(merged.targetUpdateTypeName)}</strong></div>` : ''}
+        ${merged.folderLocationText ? `<div style="grid-column:1/-1;"><span style="color:var(--s-text-3)">Folder</span><br><span style="color:var(--s-text-2);">${escHtml(merged.folderLocationText.replace(/\//g, ' / '))}</span></div>` : ''}
         ${merged.modifiedDate||merged.lastModifiedDate ? `<div><span style="color:var(--s-text-3)">Modified</span><br>${escHtml(formatDate(merged.modifiedDate||merged.lastModifiedDate))}</div>` : ''}
         ${merged.createdDate ? `<div><span style="color:var(--s-text-3)">Created</span><br>${escHtml(formatDate(merged.createdDate))}</div>` : ''}
         ${merged.description||merged.Description ? `<div style="grid-column:1/-1;"><span style="color:var(--s-text-3)">Description</span><br><span style="color:var(--s-text-2);">${escHtml((merged.description||merged.Description||'').substring(0,200))}</span></div>` : ''}
@@ -2679,6 +3658,20 @@ ${filePattern ? `<div><span style="color:var(--s-text-3)">File Pattern</span><br
     document.getElementById('act-back-btn')?.addEventListener('click', () => {
         S.actDetail = null;
         renderActivitiesList(document.getElementById('scout-reports-body'));
+    });
+
+    // Copy-button delegation — mirrors the handler in renderAutomationDetail()
+    // so .scout-code-block in the activity report behaves identically to the
+    // automation tab's step-code viewer.
+    container.querySelectorAll('.scout-code-copy').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const block = btn.closest('.scout-code-block');
+            const code = block?.querySelector('.scout-code-text')?.textContent || '';
+            navigator.clipboard.writeText(code).then(() => {
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.innerHTML = I.copy + ' Copy'; }, 1500);
+            }).catch(() => toast('Copy failed', 'error'));
+        });
     });
 }
 
@@ -2771,10 +3764,12 @@ function renderReportSubView(container) {
     if (!container) return;
     switch (S.reportsTab) {
         case 'de':
+            // CSV download is now inside the generated HTML report — single
+            // button here keeps the panel tight, no flex:1 so it matches the
+            // natural width of the buttons in journeys/automations/assets.
             container.innerHTML = renderReportCard('de-report', 'Data Extensions Report', I.database,
-                'Exports all DEs with folder path, row count, field count, sendable status, owner and dates.',
-                `<button class="scout-btn scout-btn-primary" style="flex:1;" id="de-report-html">${I.report} View HTML Report</button>
-                 <button class="scout-btn scout-btn-secondary" style="flex:1;" id="de-report-csv">${I.download} Export CSV</button>`);
+                'Exports all DEs with folder path, row count, field count, sendable status, owner and dates. CSV download is inside the report.',
+                `<button class="scout-btn scout-btn-primary" id="de-report-html">${I.report} View HTML Report</button>`);
             document.getElementById('de-report-html')?.addEventListener('click', async () => {
                 const st = document.getElementById('de-report-status');
                 if (st) st.innerHTML = `<div class="scout-loading-state">${I.spinner} Generating…</div>`;
@@ -2792,22 +3787,6 @@ function renderReportSubView(container) {
                         }
                         openBlobReport(html);
                         if (st) st.innerHTML = `<span class="scout-status-success">${I.check} ${res.count} DEs exported.</span>`;
-                    } else {
-                        if (st) st.innerHTML = `<span class="scout-status-error">Failed: ${escHtml((res&&res.error)||'Unknown')}</span>`;
-                    }
-                });
-            });
-            document.getElementById('de-report-csv')?.addEventListener('click', () => {
-                const st = document.getElementById('de-report-status');
-                if (st) st.innerHTML = `<div class="scout-loading-state">${I.spinner} Generating…</div>`;
-                chrome.runtime.sendMessage({ action: 'generateReport', format: 'csv', instance }, res => {
-                    if (res && res.success && res.csv) {
-                        const blob = new Blob([res.csv], { type: 'text/csv;charset=utf-8;' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url; a.download = `sfmc-de-report-${new Date().toISOString().slice(0,10)}.csv`; a.click();
-                        URL.revokeObjectURL(url);
-                        if (st) st.innerHTML = `<span class="scout-status-success">${I.check} ${res.count} DEs exported to CSV.</span>`;
                     } else {
                         if (st) st.innerHTML = `<span class="scout-status-error">Failed: ${escHtml((res&&res.error)||'Unknown')}</span>`;
                     }

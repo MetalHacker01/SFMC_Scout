@@ -4,6 +4,487 @@ A chronological log of bugs and their working fixes. **Read this before touching
 
 ---
 
+## 2026-05-19 — Automation folder: replicate the detail view's exact two-call hydration (with numeric id from the legacy listing)
+
+**Problem:** Previous fix tried to resolve automation folder paths via a single bulk folder-tree fetch using `categoryId`. Result: only top-level folders like "my automations" rendered — anything deeper showed "—". The folder-tree response apparently doesn't include enough parent-chain data, OR `categoryId` from v1 doesn't match the folder ids in that response.
+
+**Insight:** The in-panel automation detail view ALREADY does this correctly. Its flow:
+1. Call `automation/v1/automations/{GUID}` → get `steps[]`.
+2. Call `legacy/v1/beta/bulk/automations/automation/definition/{LEGACY_NUMERIC_ID}` → get `def.folderPath` (the full breadcrumb pre-formatted by SFMC).
+
+The two endpoints use DIFFERENT id formats. The detail view works because clicks come from the legacy gridView search results, whose items carry the numeric id in `item.id`. The previous report attempt tried to use the v1 GUID against the legacy bulk endpoint and got 400 "Definition_ID could not be parsed".
+
+**Fix:** Stop reinventing — match the detail view exactly.
+
+The report already fetches BOTH bulk lists at the top of `generateAutomationsReport`:
+- v1 bulk `automation/v1/automations` → `id` = GUID
+- legacy gridView `legacy/v1/beta/automations/automation/definition/?view=gridView` → `id` = legacy numeric, `key` = GUID
+
+Both lists share the `key` field (GUID). The merge step joins on `key`, so for every v1 automation we already have the matching legacy listing entry — and therefore the legacy numeric id. Captured as `_legacyId` during the merge.
+
+Hydration then fires two parallel calls per automation:
+- v1 detail with the GUID `a.id` → `steps.length` → `_stepCount`
+- Legacy bulk with the numeric `a._legacyId` → `def.folderPath || def.categoryPath` → `_folderPath`
+
+Both calls use the EXACT id format their endpoint expects. Same parse logic the detail view's enrichment block uses (`leg.definition || leg.automation || (Array.isArray(leg.items) ? leg.items[0] : null) || leg`). Same headers (`'GET', { 'accept': 'application/json' }`).
+
+Removed the bulk folder-tree walk fallback — unnecessary now that the per-row legacy bulk call returns the pre-formatted breadcrumb directly.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Using a single id format across BOTH `automation/v1/automations/{id}` and `legacy/v1/beta/bulk/automations/automation/definition/{id}`.** They look like the same hierarchy of endpoints but want DIFFERENT id formats: v1 wants the GUID, legacy bulk wants the numeric id. Joining the two list endpoints by their shared `key` (GUID) is the bridge that gives you both ids.
+- **Reinventing folder resolution when the panel already has a working path.** If the in-panel detail view shows the folder correctly, the API supports it — replicate that exact two-endpoint pattern instead of inventing a folder-tree-walk fallback.
+- **Skipping the legacy gridView fetch** in the report. It supplies `_legacyId` for every automation; without it, the legacy bulk endpoint can't be called and folder stays empty.
+
+---
+
+## 2026-05-19 — Automation folder hydration: GUID vs legacy ID mismatch on `legacy/v1/beta/bulk/...`
+
+**Problem:** Per-row hydration in the automations report was firing two endpoints — one of them returned 400 for every single automation:
+
+```
+{
+  "globalErrors": [],
+  "objectErrors": [{
+    "objectName": "List`1",
+    "error": "REST Parameter is invalid.",
+    "additionalInfo": { "pairs": [
+      { "key": "ErrorCode", "value": "InvalidParameter" },
+      { "key": "Parameter", "value": "Definition_ID could not be parsed, please encode correctly" }
+    ]}
+  }]
+}
+```
+
+**Root cause:** The endpoint `legacy/v1/beta/bulk/automations/automation/definition/{id}` expects the **legacy numeric ID** (e.g. `12345`), not the **v1 GUID** (e.g. `1204754d-d766-4f2f-8ef9-ff7550922e36`). The in-panel detail view works because users typically click from the search results, which uses the legacy `gridView` listing and hands the click an item with the legacy numeric id. The report iterates the v1 bulk list (`automation/v1/automations`) whose items have GUIDs — passing those to the legacy bulk endpoint hits the error parser.
+
+**Fix:** Dropped the legacy bulk per-id call entirely. Hydration now:
+1. **Stage 1 (per row, batched parallel ×10)** — fetch only `automation/v1/automations/{id}` which accepts the GUID. Extract:
+   - `steps[].length` (or `automationProcesses[].length`) → `_stepCount`
+   - `categoryId` → `_categoryId` for the stage-2 walk
+2. **Stage 2 (one bulk fetch)** — `legacy/v1/beta/folder?$where=allowedtypes in ('automations','automation')&$pagesize=2000`. Build a flat `folderMap` keyed by id with `{ name, parentId }`. Walk each automation's categoryId up the chain to produce a breadcrumb like `my automations / Production Team Folder / Chris Chan Training / Cengage`. Same exact pattern the asset report uses.
+
+This is the same approach the in-panel asset detail card uses for asset folders — single bulk category fetch, in-memory parent walk. No per-row folder GETs, no legacy/v1 ID mismatch traps.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Passing v1 GUIDs to `legacy/v1/beta/bulk/automations/automation/definition/{id}`.** That endpoint's "Definition_ID" parameter wants the legacy numeric ID. If the calling context only has the GUID, don't call this endpoint — use the folder-tree walk pattern instead.
+- **Trusting that "this endpoint works in the in-panel view" implies it works anywhere.** Sometimes the in-panel call path has a different upstream id source than the report does. Verify with the actual ID format the report has access to.
+- **Two-endpoint hydration when one endpoint is silently 400ing.** The Promise.allSettled wrapper hides the failure; result looks fine to the script but data never populates. Pick the endpoint whose ID format you actually have.
+
+---
+
+## 2026-05-19 — Two real bugs: CSV button non-functional everywhere + automation folder still empty
+
+**Problems:**
+1. **"Download CSV" button does nothing on any report.** Worked in DE blob but failed identically across Automations / Journeys / Assets / Activities.
+2. **Automation Folder column still empty.** Previous fix added the legacy-bulk per-id call, but the column never populated for any row.
+
+**Root cause — CSV button:**
+The embedded inline `<script>` in `reportHtmlShell` had this regex literal at the top of `_downloadCsv()`:
+
+```js
+return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+```
+
+`reportHtmlShell` is itself one big template literal. Inside a JS template literal, `\n` and `\r` are escape sequences that the OUTER literal eagerly resolves to actual newline + CR characters. So the HTML written out to the report contained:
+
+```js
+return /[",
+]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+```
+
+The newline lives literally INSIDE the regex literal — which is a JS `SyntaxError` (regex literals can't span lines). The entire `<script>` block fails to parse, so neither the CSV click handler NOR the search-filter input handler get registered. To the user: button is dead.
+
+The DE report's separate shell in `services/DEReportService.js` had the right escaping (`\\n\\r`) — it actually worked — but the user (reasonably) treated all 5 reports as one population. So the DE one had been quietly working; user assumed all broken.
+
+**Root cause — automation folder:**
+Multiple compounding issues with the previous attempt:
+1. The hydration fired all 500+ automations × 2 endpoints in one giant `Promise.allSettled` — SFMC silently 429-throttled most of them.
+2. Headers default to `{accept, content-type}` from `sfmcFetch`. The working detail view uses only `accept: application/json` on the GET. The extra content-type may have shifted some responses to error.
+3. Field-name fallback was thin — only checked `def.folderPath || def.categoryPath`. Some response shapes use `def.categoryNamePath` or no path string at all (just `categoryId`).
+4. No fallback for the (likely) case where the bulk endpoint returns categoryId but no breadcrumb string.
+
+**Fix:**
+
+*CSV button:*
+- `content.js reportHtmlShell` — changed `/[",\n\r]/` to `/[",\\n\\r]/` so the outer template literal outputs the escape sequences correctly (resulting `\n` and `\r` are valid inside a regex character class). Single character fix restores the entire script.
+
+*Automation folder hydration:*
+- `content.js generateAutomationsReport` — three-layer strategy:
+  1. **Batched parallel (10 at a time)** instead of all-at-once. Avoids the rate-limit silence.
+  2. **Headers match the working detail view exactly** — `'GET', { 'accept': 'application/json' }` on both v1 and legacy bulk fetches. No content-type on GET.
+  3. **Expanded field fallback** — checks `def.folderPath || def.categoryPath || def.categoryNamePath || def.folderLocationText`. Captures `def.categoryId` separately when no path field is returned.
+  4. **Bulk folder-tree fallback** — for any automation still without a folder string after per-row hydration, fetches `/legacy/v1/beta/folder?$where=allowedtypes in ('automations','automation')&$pagesize=2000` ONCE, builds a parentId map, walks chains client-side. Same approach as the asset report.
+- `_stepCount` extraction also widened to check `v1.steps` OR `v1.automationProcesses` (different SFMC versions wrap the step list differently).
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Bare `\n` / `\r` inside a regex character class embedded in a template literal.** Use `\\n` / `\\r` so the template literal preserves the escape into the output. Same trap waiting for tabs, form-feeds, etc.
+- **Fire-and-forget `Promise.allSettled` over hundreds of SFMC fetches.** Batch in groups of 10 to avoid silent throttling. SFMC's rate limiter doesn't return 429 reliably — it just hangs / returns partial responses.
+- **Trusting a single field name to surface SFMC's folder breadcrumb.** Try `folderPath`, `categoryPath`, `categoryNamePath`, `folderLocationText` in turn. Capture `categoryId` as a separate-fallback path-walk target.
+- **Skipping the folder-tree-walk fallback** when the bulk endpoint returns only `categoryId`. The asset report demonstrates the pattern — fetch all folders once, walk parents in memory, no per-row recursive calls.
+
+---
+
+## 2026-05-19 — Polish pass: DE button width, dark-mode Email ID readability, automation folder via legacy bulk, docs refresh
+
+**Problems:**
+1. **DE Report button stretched to full width** after the CSV button was moved into the blob. The button had `style="flex:1;"` carried over from when there were two buttons.
+2. **Asset detail Email ID mono pill unreadable in dark mode** — text was `--s-text` (white) on a browser-default `<code>` background that some Chrome versions ship with a light-grey background, producing white-on-near-white.
+3. **Automation report Folder column still empty** after the previous attempt to hydrate via `automation/v1/automations/{id}?view=categoryinfo`. That endpoint does NOT return `folderLocationText` for automations (only for activities/queries). The detail-view code paths confirmed the correct source: `legacy/v1/beta/bulk/automations/automation/definition/{id}` → `def.folderPath || def.categoryPath`.
+4. **Documentation drift** — `index.html` Journeys + Reports + Search sections still described the old shape (no detail cards, single-button reports, no in-blob CSV). README's feature bullets out of date.
+
+**Fix:**
+1. `content.js renderDEReport` + `renderReportSubView('de')` — dropped `style="flex:1;"` from the single primary button. Natural width now matches automations / journeys / assets / activities report buttons.
+2. `panel.css .scout-adetail-headbit-mono` — gave it the same explicit background + border + accent-on-hover treatment as `.scout-jdetail-mono`. No more reliance on `<code>` browser defaults. Readable in both light and dark.
+3. `content.js generateAutomationsReport` — replaced the v1 `?view=categoryinfo` hydration with a parallel pair: `automation/v1/automations/{id}` (for `steps.length`) AND `legacy/v1/beta/bulk/automations/automation/definition/{id}` (for `def.folderPath || def.categoryPath`). Same legacy-bulk endpoint the in-panel automation detail view has always used to resolve breadcrumbs like "my automations / Production Team Folder / Chris Chan Training / Cengage".
+4. `index.html`:
+   - Journeys section rewritten — describes the row pills, expand-on-click detail card, schedule humanizer behaviour (with a callout warning about the unreliable `scheduleState` field), the four status colour groups.
+   - Reports section rewritten — new column shapes per report, "Download CSV (in-blob)" feature line, enrichment-source notes, asset clickable CDN links.
+   - Search section expanded — covers asset Preview modal flow (template vs email endpoint shapes), per-row activity hydration, journey detail card.
+5. `README.md` — Universal Search, Journeys, Reports bullets refreshed to match the new behaviour.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- `flex:1;` on the single DE Report primary button. With one button, flex:1 stretches it to fill — natural width keeps the panel tight and consistent with the other report cards.
+- Letting `<code>` elements inherit browser-default styling on dark surfaces. Always set explicit `background` + `color` + (ideally) `border` so the pill reads in both themes. Same trap caught `.scout-adetail-headbit-mono` here.
+- `automation/v1/automations/{id}?view=categoryinfo` as the folder source for AUTOMATIONS. That param works on activities (queries, scripts, etc.) and returns `folderLocationText`, but the same param on the automations endpoint does NOT return a folder field. Use `legacy/v1/beta/bulk/automations/automation/definition/{id}` and read `def.folderPath || def.categoryPath`.
+- Letting docs drift behind the implementation. `index.html` is the public face — when feature shape changes, the matching section gets a same-PR update.
+
+---
+
+## 2026-05-19 — Report consolidation: in-blob CSV button, asset 403 fix, journey Entry DE join, automation enrichment
+
+**Problem cluster:**
+1. **Assets report broken with 403 EBADCSRFTOKEN** — the report still hit `content-builder.{stack}.marketingcloudapps.com/fuelapi/asset/v1/content/assets/query` which requires a fresh CSRF token. When the captured `cbToken` went stale, the report failed.
+2. **Journey report Entry DE column was empty for every journey.** The bulk-search response's `triggers[0].metaData` does NOT include `dataExtensionName` — it has only `eventDefinitionId`. Resolving the DE name requires joining to the event-definition record. We weren't doing that.
+3. **Automations report missing steps + folder** even though those columns existed in the table header. Code was reading `a.stepCount` / `a.categoryPath` / `leg.activityCount` / `leg.categoryPath` — none of which the SFMC bulk endpoints actually return. Result: every row showed "—".
+4. **CSV export limited to DE** — every other report (Automations / Journeys / Assets / Activities) was view-only. User wanted CSV download available on all reports, moved INTO the generated blob page itself so the panel UI stays tight.
+
+**Fix:**
+
+*Asset report 403:*
+- `content.js generateAssetsReport` — switched the bulk-search URL from `content-builder.{stack}.marketingcloudapps.com/fuelapi/...` (CSRF-required) to `mc.{stack}.exacttarget.com/cloud/fuelapi/...` (cookie-only proxy). Removed the `freshCbToken` fetch + `x-csrf-token` header. Same request body shape; no migration cost.
+
+*Journey Entry DE:*
+- `content.js generateJourneysReport` — bulk-fetches all event definitions once (`/interaction/v1/eventDefinitions?$sort=createdDate desc&$pageSize=1000&$page=1`) and builds an index keyed by both `id` (lowercased) and `eventDefinitionKey`. For each journey row, `resolveEntryDe(j)` checks `triggers[0].metaData.dataExtensionName` first (rare inline case), then falls back to the eventDef join via `eventDefinitionId`. Same pattern DEUsageHandler uses for journey DE lookup.
+
+*Automations report enrichment:*
+- After the initial bulk fetch + legacy merge, fires parallel `automation/v1/automations/{id}?view=categoryinfo` GETs for every automation. Extracts `folderLocationText` → `_folderPath` (when not already set from legacy) and `steps.length` → `_stepCount`. HTTP/2 multiplexes; wall-time cost ≈ one extra request for hundreds of automations. Status line shows "Enriching N automations…" while in flight.
+
+*CSV in every report blob:*
+- `content.js reportHtmlShell` — added 9th `csvData` parameter `{ headers, rows }`. When present:
+  - Renders a "Download CSV" button in the report header (accent-filled, download-arrow icon)
+  - Embeds the data as JSON inside a `<script>` (escaped `</script>` via `<`)
+  - Client-side `_downloadCsv()` builds the CSV with UTF-8 BOM, proper quote escaping (`"`, `,`, `\n`, `\r`), and triggers a `<a download>` click — wholly self-contained, no extension round-trip
+  - File name: `{Report_Title}_{timestamp}.csv`
+- `generateAutomationsReport`, `generateJourneysReport`, `generateAssetsReport`, `generateActivitiesReport` — each builds a `csvData` object alongside the HTML rows and passes it as the 9th arg.
+- `services/DEReportService.js` — added matching `<button id="report-csv-btn">` + style block + embedded CSV via `buildDeCsvData(allDeData)`. Header CSV available on the DE report too.
+- `content.js renderDEReport` + the Reports → DE tab — removed the standalone panel "Export CSV" buttons; only "View HTML Report" remains. CSV now flows through the blob's in-page button per the user's "move it inside" request.
+
+*Activities report enrichment:*
+- Parallel hydration via `?view=categoryinfo` on all 7 activity-type endpoints, same pattern as activity search. Adds Update Type + Folder columns.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Asset report on `content-builder.{stack}.marketingcloudapps.com/fuelapi/...`.** That path requires a fresh CSRF token; the `mc.{stack}.exacttarget.com/cloud/fuelapi/...` cookie-only proxy works for the same `/asset/v1/content/assets/query` endpoint. Stale tokens → 403; stale cookies don't happen because they refresh on every SFMC tab navigation.
+- **Reading `triggers[0].metaData.dataExtensionName` as the Entry DE source.** That field is empty 99% of the time. Always bulk-fetch `/interaction/v1/eventDefinitions` and join by `eventDefinitionId`.
+- **Trusting `legacy.activityCount` / `legacy.categoryPath` / `a.stepCount` / `a.categoryPath` for automation enrichment.** None of those fields are reliably populated by the SFMC list endpoints. The only reliable source is `automation/v1/automations/{id}?view=categoryinfo` per row — same pattern as activities.
+- **Standalone panel "Export CSV" buttons in addition to the in-blob button.** User explicitly asked for the CSV to live INSIDE the report blob (top header). Reintroducing a panel-side CSV button duplicates the UX.
+- **Sequential hydration** for the per-row `?view=categoryinfo` calls in any of the report generators. Use `Promise.allSettled` — HTTP/2 multiplexes; 500 parallel ≈ 1 wall-time request worth.
+
+---
+
+## 2026-05-19 — Activity search rows now show folder + update type inline
+
+**Problem:** Main search results for activities (SQL Query / Script / Filter / Send Email / Import / File Transfer / Data Extract) showed only the activity type label + modified date in the meta line. No folder location, no SQL update mode — both visible in the SFMC UI and useful at-a-glance scan signals.
+
+**Fix:** `handlers/search/ActivitySearchService.js`:
+1. **Free fields from bulk listing** — captured `targetUpdateTypeName` and `categoryId` from each item in the initial activity-type search (already present in the response payload).
+2. **Folder hydration via parallel `?view=categoryinfo`** — after the initial search completes, fires per-row GETs against the same 7 endpoint families (`queries`, `scripts`, `filters`, `imports`, `filetransfers`, `dataextracts`, `emailsenddefinition`) with `?view=categoryinfo` appended. SFMC returns `folderLocationText` (e.g. "Query/Production Team/Aldorino/X") which we convert to " / "-separated form for display. Up to 40 parallel fetches; HTTP/2 multiplexes so wall-time cost is ≈ one extra request, not 40×. Failures silent (row keeps null path).
+3. **Update mode also hydrated** as a fallback for endpoints that don't return it inline (the bulk SQL listing already has it; the per-row hydration covers Imports/Extracts when needed).
+4. `_hydrationKey` is the address used for the per-row call (queries use objectId, others use customerKey). Stripped from the response before sending back over the message bus.
+
+`content.js renderSearchRows` — added an `else if (r.type === 'activity')` branch:
+- Line 1: type · folder breadcrumb · update-mode pill
+- Line 2: modified date
+- Update mode rendered as a small `.scout-result-row-pill` (8px tall, mono-uppercase, light bg) so it reads at a glance without competing with the row name.
+
+`panel.css` — added `.scout-result-row-pill` definition.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Sequential per-row hydration calls. Use `Promise.allSettled` over all results so HTTP/2 multiplexes — sequential turns 40 × 50 ms into 40 × 200 ms even though parallel would still finish in ~200 ms.
+- Sending the internal `_hydrationKey` over the chrome.runtime message bus. It's an implementation detail of the hydration pass — delete it before returning so the row payload stays clean.
+- Using `categoryId` alone to build a folder breadcrumb client-side for activities. `folderLocationText` is a pre-built breadcrumb from `?view=categoryinfo` — using it avoids a separate "fetch all automation categories + walk parentIds" step.
+
+---
+
+## 2026-05-19 — HTML reports + activity detail: parity with the new card features
+
+**Problem:** The HTML reports for journeys and assets still showed the old column shape — none of the new useful fields (population, HTS, trigger type, Email ID, full folder path) made it into the static reports. Activity detail viewer was missing folder location entirely and didn't surface SQL `targetUpdateTypeName` even though SFMC's own UI shows it.
+
+**Insight from HAR (`mc.s11.exacttarget.com.har`):** SFMC's UI requests activity detail with `?view=categoryinfo` query param. Response includes:
+- `folderLocationText: "Query/Production Team/Aldorino Rrushi/SafetyLeadership Journey"` — full breadcrumb in one field, no folder-tree walk needed.
+- `targetUpdateTypeName: "Overwrite"` (or Append / Update / Update Add) — the SQL/Import/Extract target update mode.
+- `validatedQueryText` — compiled SQL with INSERT INTO + qualified table names.
+- `parentCategoryId: [...]` — parent chain.
+
+The same `?view=categoryinfo` works for every activity endpoint family (`queries`, `scripts`, `filters`, `imports`, `filetransfers`, `dataextracts`, `emailsenddefinition`) — consistent SFMC pattern.
+
+**Fix:**
+
+*Journeys report:*
+- `content.js generateJourneysReport` — dropped Key + Created columns (noise in a report). Added: `HTS` (small blue pill if `metaData.highThroughputSending.email`), `Trigger` (`triggers[0].type`), `Entry DE` (`triggers[0].metaData.dataExtensionName` when inline), `Population` (`stats.cumulativePopulation`, right-aligned, locale-formatted). New column order: Name · Status · v · HTS · Trigger · Entry DE · Population · Channel · Modified.
+
+*Assets report:*
+- `content.js generateAssetsReport` — fetches `/asset/v1/content/categories?$page=1&$pagesize=500` once at the start of the report (cookie-only proxy). Builds an in-memory category map and walks `parentId` chains to render the full folder breadcrumb (e.g. "Content Builder / Email / API_Email") in the Folder column.
+- Added `Email ID` column (right-aligned mono, `data.email.legacy.legacyId`) — only populated for email assets, dashes elsewhere.
+- Name cell is now a clickable CDN link when `fileProperties.publishedURL` is present — turns the report into a one-click asset audit for uploaded files. Subtle underline, inherits report row color.
+
+*Activity detail viewer:*
+- `content.js renderActivityDetail` endpoint map — appended `?view=categoryinfo` to all 7 activity-type endpoints (queries / scripts / filters / imports / filetransfers / dataextracts / emailsenddefinition).
+- Header info grid now shows: `Update Type` row (from `targetUpdateTypeName` — Overwrite / Append / Update / Update Add) and `Folder` row spanning full width (from `folderLocationText`, rendered with " / " separators for readability).
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Reports that copy only the search payload's top-level fields. SFMC bulk-search responses include `stats.cumulativePopulation`, `metaData.highThroughputSending.email`, `triggers[0]` (with `type` and inline DE meta) — all reportable without per-row fetches. Skipping them throws away free signal.
+- Per-row fetch to derive activity folder paths. `?view=categoryinfo` returns the full breadcrumb in `folderLocationText` directly. The flat path is the standard SFMC pattern — don't reinvent it via parentId traversal for activities.
+- Bulk-fetching `/asset/v1/content/categories` per row when generating reports. Fetch once at the top of the report function, build a Map, walk parentIds in memory — same idea used for the in-panel asset detail card.
+- Hiding `targetUpdateTypeName` from the activity detail. For SQL/Import/Extract activities, the update mode (Overwrite vs Append vs Update) is critical operational info — never just "what does this run?".
+
+---
+
+## 2026-05-19 — Journey/asset card iteration: schedule fix, quieter asset card, full folder path, template preview, activity-count from interaction GET
+
+**Problem cluster (user feedback after first detail-card rollout):**
+
+Journey card:
+1. **Schedule rendered as "No Schedule" for every journey** even when the eventDef had a fully populated recurring schedule (e.g. `frequency: Hourly`, `interval: 1`, `endDateTime`, `timeZone`).
+2. External Key row was noise — never useful at a glance.
+3. Entry Source row's DE GUID code-pill was clutter.
+4. `entryMode` in row meta ("SingleEntryAcrossAllVersions") meant nothing to anyone.
+5. Population fetched via a separate `goalstatistics` GET when the bulk-search payload already had `stats.cumulativePopulation`.
+6. Activity count off — needed to match the SFMC UI "Activity Count: 3" badge, not the goal-stats-derived `days[].activities[]` filtering.
+7. Entry Criteria displayed as a single-line code pill — wrapped poorly for long AND/OR filter expressions.
+
+Asset/email card:
+1. **Template preview 404'd** — `/artifacts/thumbnail/html` is email-only; templates use `/artifacts/thumbnail/` (no /html).
+2. Card felt heavy — big stat-pill strip (Status / Email ID / Size / Dimensions) + buttons + Customer Key row. User wanted "quieter".
+3. `Type: id 197` code pill in the detail card was meaningless.
+4. Folder only showed the leaf category name ("Email"), not the full path ("Content Builder / Email / API_Email").
+5. Asset ID wasn't on the search-result row meta line — user wanted it inline there alongside Email ID for emails.
+
+**Root cause for the schedule bug:** `humanizeJourneySchedule` short-circuited on `metaData.scheduleState === 'No Schedule'` — but the SFMC API populates `scheduleState='No Schedule'` even when the actual `schedule` object has full data (`frequency`, `startDateTime`, `interval`, `endDateTime` etc.). The scheduleState text is unreliable — the only correct signal is whether the `schedule` object's data fields are populated.
+
+**Fix:**
+1. `content.js humanizeJourneySchedule` — removed the `scheduleState === 'No Schedule'` short-circuit entirely. Now decides "schedule present?" by checking `schedule.frequency || schedule.startDateTime || flowMode in {runOnce, recurring}`. Recurring branch handles `Hourly/Daily/Weekly/Monthly` with `interval` ("Hourly" / "Every 2 days"), formats start/end dates, appends timezone. Falls back to "Run Once" for runOnce flow mode.
+2. `content.js renderJourneyDetail` — dropped External Key row, dropped DE-ID code pill in Entry Source (kept type chip + DE name), dropped `Linked Automation` (already done in prior pass) + ctx line.
+3. `content.js renderSearchRows` journey branch — dropped `entryMode` and external-key snippet from the row meta line.
+4. `handlers/de/DEUsageHandler.js` — added `handleFetchJourneyInteractionDetail` that GETs `/interactions/{id}?extras=all&includeStops=true&versionNumber=N` (cookie-only proxy works). Returns the journey including the full `activities[]` array.
+5. `content.js extractInteractionActivityCount(detail)` — counts entries in `activities[]` where `type` is set (unconfigured/placeholder activities have no type and are excluded). This matches the SFMC UI's "Activity Count" badge exactly.
+6. `content.js loadJourneyDetail` — replaced goal-stats fetch with `fetchJourneyInteractionDetail`. Population now read directly from `j.stats.cumulativePopulation` (search payload — no fetch). Both eventDef + interaction-detail fire in parallel via `Promise.allSettled`.
+7. `content.js renderJourneyDetail` — Entry Criteria row now a multi-line `<pre class="scout-jdetail-codeblock">` block that wraps long AND/OR filter expressions properly.
+8. `handlers/search/AssetSearchService.js handleFetchAssetPreview` — now accepts `assetTypeName`. If type is `template` or `emailtemplate`, requests `/artifacts/thumbnail/` (no /html). Otherwise requests `/artifacts/thumbnail/html?includeHeaderFooter=true&includeDesignContent=true`. Note: `templatebasedemail` is an EMAIL, not a template — only `template`/`emailtemplate` use the bare variant.
+9. `handlers/search/AssetSearchService.js` — new `handleFetchAssetCategories` handler hitting `/asset/v1/content/categories?$page=1&$pagesize=500`. Returns all categories with id/name/parentId so we can walk the chain client-side.
+10. `content.js ensureAssetCategoryTree(instance)` — fetches the full category tree once per session (in-flight Promise dedupe so multiple simultaneous expands share one network call). `buildFolderPath(categoryId, fallbackName)` walks `parentId` up the chain to build "Content Builder / Email / API_Email" (limit depth 20, dedupe via `seen` Set).
+11. `content.js renderAssetDetail` — rewritten quieter: NO stat strip (Status / Customer Key dropped entirely), inline header-meta strip with Email ID / Size / Dimensions as small mono-uppercase labelled text. Type row no longer has `id N` follower. Folder row uses the full resolved path. Actions are inline text links (Preview · View image · Copy name) with dot separators — not buttons.
+12. `content.js renderSearchRows` asset/email branch — added `ID: {assetId}` and (when applicable) `Email ID: {legacyId}` to the row meta line.
+13. `panel.css` — replaced `.scout-asset-actions` + `.scout-asset-action` button styles with `.scout-adetail-link` (text-link variant) + `.scout-adetail-action-sep` (dot separator) + `.scout-adetail-headmeta` / `.scout-adetail-headbit` / `.scout-adetail-headbit-mono` for the inline meta strip. Added `.scout-jdetail-codeblock` for journey criteria.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Trusting `metaData.scheduleState === 'No Schedule'`** as the gatekeeper for rendering a schedule. The API populates that field misleadingly. Only trust `schedule.frequency` / `schedule.startDateTime` to decide whether to render.
+- Using `/artifacts/thumbnail/html` for templates (`assetTypeName === 'template'`). That endpoint 404s on pure templates; they need the bare `/artifacts/thumbnail/`. `templatebasedemail` is NOT a template — it's an email — and uses /html.
+- Goal-statistics for journey activity count. The correct source is `interactions/{id}?extras=all` → `activities[]` filtered by `type`. Goal-stats inflates the count with `StartActivity` / `EmailAudience` / `StopInteractionActivity` plumbing rows that aren't in the UI count.
+- Per-row GET to derive `cumulativePopulation`. The bulk-search response already includes it at `items[].stats.cumulativePopulation` — no extra fetch needed.
+- Showing `assetTypeId` as an `id N` code pill in the detail card. Asset type IDs are internal — users don't think in those terms. Show only the friendly assetType displayName chip.
+- Re-introducing the Status pill / Customer Key row on the asset detail card. User explicitly flagged both as visual noise.
+- Single-line code pill for entry-criteria filter strings. Use a multi-line wrapping `<pre>` so long AND/OR clauses don't truncate.
+- Returning only the leaf category name as the asset folder. Walk the full parent chain via `ensureAssetCategoryTree` / `buildFolderPath` to surface the full breadcrumb like SFMC's own UI.
+
+---
+
+## 2026-05-19 — Asset rows: inline detail card + rendered-HTML preview modal
+
+**Problem:** Email / template / file rows in main search showed only name + modified date. Power users needed: the legacy Email ID (the integer "EmailID" Email Studio surfaces), file size + dimensions for uploads, the published CDN URL for view-in-browser, and a way to preview a rendered email/template thumbnail without leaving the panel. Visual style also needed to match the polished journey detail card so the two felt like siblings.
+
+**Root cause:** `AssetSearchService` was only forwarding `id / name / assetType / path / modified*` from the search response. The bulk `/asset/v1/content/assets/query` endpoint actually returns `status.name`, `data.email.legacy.legacyId`, `fileProperties.{publishedURL,fileName,fileSize,width,height,extension}`, `customerKey`, `description`, `objectID`, `assetType.id` — all in the same payload. No extra GET needed for the basics. Only the rendered preview required a separate fetch.
+
+**Fix:**
+1. `handlers/search/AssetSearchService.js` — extended the mapped output to include `status` / `legacyId` / `customerKey` / `objectID` / `assetTypeName` / `assetTypeId` / `description` plus the entire `fileProperties` block (`publishedURL`, `fileName`, `fileSize`, `fileWidth`, `fileHeight`, `fileExtension`). All sourced from the existing bulk-search response payload — no second fetch per row.
+2. `handlers/search/AssetSearchService.js` — new exported handler `handleFetchAssetPreview({ assetId, instance })`. Hits `/asset/v1/content/assets/{id}/artifacts/thumbnail/html?includeHeaderFooter=true&includeDesignContent=true` cookie-only on the `mc.{stack}.exacttarget.com/cloud/fuelapi/...` proxy. Returns `{ width, height, image }` where `image` is a raw base64 PNG payload.
+3. `background.js` — imported `handleFetchAssetPreview`, routed via `action: 'fetchAssetPreview'`.
+4. `content.js`:
+   - State: `S.assetExpanded` (Set of asset IDs currently expanded inline).
+   - Helpers: `getAssetCategory(item)` data-driven classification (email / template / file / code / other based on presence of `publishedURL` + `legacyId` + assetType name keywords — not a brittle ID list). `formatFileSize(bytes)`. `ASSET_STATUS_COLOR` legend.
+   - `_assetPreviewCache` Map keyed by assetId — preview fetches dedupe per session.
+   - `fetchAssetPreview(assetId, instance)` thin wrapper around `chrome.runtime.sendMessage`.
+   - `renderAssetDetail(item)` builds an inline card with the same `.scout-jdetail-stats` strip + `.scout-jdetail-row` shape used by the journey card. Stat strip shows Status / Email ID / File Size / Dimensions. Field rows show Type / Folder / Created / Modified / File Name / Customer Key / Description. Action row shows context-appropriate buttons (Preview / View image / Copy name).
+   - `showAssetPreviewModal(assetId, name)` injects a fullscreen overlay with backdrop-blur, fetches the base64 PNG via the new handler, renders it inside a modal card. Escape + click-outside both close.
+   - Renderer change in `renderSearchRows()`: asset/email rows now toggle between chevron-right and chevron-down based on `S.assetExpanded` state; expanded rows append `renderAssetDetail(r)` below.
+   - Click change in `bindSearchRowEvents()`: asset/email row click now toggles inline expand (was click-to-copy). Copy-name is now a button inside the expanded card. Preview/View-file buttons + mono-pill click-to-copy bound separately.
+   - New icons: `I.eye` (Iconoir eye) for Preview, `I.image` (Iconoir image) for View-image.
+5. `panel.css`:
+   - `.scout-asset-detail` reuses the journey card's `.scout-jdetail-*` styles (stat strip + row grid).
+   - `.scout-asset-actions` action-row with `.scout-asset-action` outline buttons + `.scout-asset-action-primary` accent-filled buttons. Hover lifts to accent.
+   - `.scout-preview-overlay` full-screen backdrop with `backdrop-filter: blur(2px)`, fade-in 160 ms.
+   - `.scout-preview-modal` centered card, scale-in 200 ms, soft elevation, white image background so transparent PNGs read correctly.
+   - `.scout-preview-img` max-width responsive.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Mapping asset rows with only `id / name / assetType / modifiedDate`. The bulk-search payload already contains everything — leaving fields off requires a per-row GET, which is wasteful.
+- Per-row `GET /asset/v1/content/assets/{id}` to derive `status` / `legacyId` / `fileProperties` for the detail card. Those come back in the bulk-search response — the per-row fetch is reserved for the rendered preview only.
+- Hardcoding asset type IDs to classify. SFMC has 200+ asset types; classify by presence of `publishedURL` (file) / `legacyId` or "email" in type name (email) / "template" in type name (template) / "block"/"snippet" in type name (code) instead.
+- Click-to-copy-on-row for asset/email. Row click now toggles inline expand. Copy-name is a button inside the expanded card. This unifies behaviour with the journey expand pattern.
+- Fetching the preview PNG eagerly on row expand. Fetch only on Preview button click; cache by assetId in `_assetPreviewCache` so re-opens are instant.
+- Skipping `includeHeaderFooter=true&includeDesignContent=true` on the thumbnail endpoint. Without those query params the preview omits the global header/footer + design slots — the resulting render doesn't match what SFMC's own UI shows.
+
+---
+
+## 2026-05-18 — Journey detail card polish: activity count, stat strip, dropped Linked Automation + ctx line
+
+**Problem:** User feedback on the detail card after first iteration:
+1. **Linked Automation** row was noise. The `evDef.automationId` rarely matches a meaningful automation in JB's UI flow — usually points to a hidden interaction-system automation users can't navigate to.
+2. **"Category: Audience · Used by 1 interaction"** ctx line was meaningless to the user — they didn't know what it referred to.
+3. Real ask was **count of user-built activities in the journey** (not estimated population — that was my misread). Get from goal-stats `days[].activities[]`, but skip SFMC plumbing types `StartActivity` / `EmailAudience` / `StopInteractionActivity`.
+4. Visual polish — the card needed to look at home next to the rest of the panel's components (step cards, code blocks, automation detail) rather than feeling like a separate stylistic island.
+
+**Fix:**
+1. `content.js` — added `extractJourneyActivityCount(goalStats)` that walks `days[].activities[]`, dedupes by `activityId` (same activity can appear on multiple days for long journeys), excludes the three plumbing types listed in `_JOURNEY_ACTIVITY_PLUMBING`. Stored as `state.activityCount`. Kept `extractEstPopulation` — both stats now render side-by-side in a top strip.
+2. `renderJourneyDetail` — dropped the Linked Automation row, dropped the Category/interactionCount/lastPublished ctx row, kept Entry Source / Entry Criteria / Schedule / External Key / Description. Activity Count + Est. Population shown as accent-tinted stat pills at the top.
+3. `panel.css` — full rewrite of the `.scout-journey-detail` block to use the app's `--s-*` tokens consistently: `--s-radius` for corners, `--s-accent` + `--s-accent-dim` for stats and chips, `--s-mono` for labels and technical strings, `--s-border` / `--s-border-mid` for hairlines. Added `.scout-jdetail-stats` strip and `.scout-jdetail-stat` pills (large mono number + uppercase mono label, mirrors the `.scout-step-card-num` accent-tinted treatment used in automation steps). Tighter row spacing (96px mono uppercase label column · flex-wrap value column with gap). "Open in JB" button now uses accent on hover (was muted text-3). Removed inline rgba fallbacks in favour of the actual `--s-*` tokens.
+4. Removed `.scout-jdetail-autolink` CSS + both autolink click handlers in `bindSearchRowEvents` and `bindUsageInteractions` (the button no longer exists).
+
+Both call sites (main search rows + DE Usage `Used by → Journeys`) share the same `renderJourneyDetail` and therefore inherit the polish automatically.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Including `StartActivity` / `EmailAudience` / `StopInteractionActivity` in the activity count.** Those are SFMC plumbing every journey has — including them inflates the count by 3 for trivial journeys. The user's count of "actual activities" excludes them.
+- Counting `activityId` more than once across days. Long-running journeys (with wait steps) duplicate activity rows per day in goal-stats; dedupe via the `seen` Set.
+- Re-adding the "Linked Automation" row or the "Category: X · Used by N interactions" ctx line. Both were flagged as noise.
+- Hardcoded fallback rgbas in the journey card CSS (`rgba(127,127,127,0.08)` etc.). Use the `--s-*` tokens directly so theme switching stays consistent with the rest of the panel.
+- Building a third call site that copies `renderJourneyDetail`'s logic. Both search + usage share the function; any new context (e.g. a future journey grid in Reports) must go through the same renderer.
+
+---
+
+## 2026-05-18 — Journey detail card: fixed `mc.mc.s11` URL, added est. population + entry criteria, Draft = amber
+
+**Problem:** Three issues from demo testing:
+1. Clicking any journey row showed `Couldn't load event definition: No data returned`. Network panel showed no traffic.
+2. Draft journeys rendered with a grey pill — didn't match the amber "Draft" pill used elsewhere (Activity report) and SFMC's own JB UI.
+3. Detail card didn't show the entry-criteria filter description (e.g. "EmailAddress contains arrushi") or the journey's estimated population — both visible in SFMC's own UI.
+
+**Root cause:**
+1. **Malformed URL.** `handleFetchJourneyEventDefinition` in `DEUsageHandler.js` did `https://mc.${sfmcInstance}.exacttarget.com/...` without stripping a leading `mc.` from the instance string. Content.js passes `instance='mc.s11'`, so the URL became `mc.mc.s11.exacttarget.com/...` → DNS fail → fetch caught at network layer → handler returned `success:false` → UI showed "No data returned." The eventDefinitionId IS being correctly extracted from the search payload's `triggers[0].metaData.eventDefinitionId` — only the URL was malformed.
+2. Draft was mapped to `#64748b` (slate) in `JOURNEY_STATUS_COLOR`. Other "in-flux" statuses (Paused, Unpublished) already used `#b06f00` (amber).
+3. The eventDefinitionId GET already returns `metaData.criteriaDescription`, but we weren't rendering it. The journey's row count comes from a separate endpoint (`/interaction/v1/goalstatistics/{journeyId}?versionNumber={N}` → `days[0].activities[0].cumulativePopulationForDay`) that wasn't wired up at all.
+
+**Fix:**
+1. `handlers/de/DEUsageHandler.js handleFetchJourneyEventDefinition`: `instance.replace(/^mc\./, '')` before prepending `mc.`. Now produces `mc.s11.exacttarget.com/...` regardless of whether the caller passes `mc.s11` or `s11`.
+2. Added new handler `handleFetchJourneyGoalStats` that hits `/interaction/v1/goalstatistics/{interactionId}?versionNumber={ver}` cookie-only. Exported through `handlers/de/index.js`, routed in `background.js` via `action: 'fetchJourneyGoalStats'`.
+3. Added `triggerDescription` to `JourneySearchService.search()` output — populated from `triggers[0].description` (the criteria string, when the trigger carries one).
+4. `content.js`:
+   - Added `_goalStatsCache` Map + `fetchJourneyGoalStats(interactionId, versionNumber, instance)`.
+   - Added `extractEstPopulation(goalStats)` that prefers `StartActivity` row's `cumulativePopulationForDay`, falls back to first row.
+   - `loadJourneyDetail` now fires `Promise.allSettled([fetchJourneyEventDef, fetchJourneyGoalStats])` — both independent; either can fail without blocking the other.
+   - `renderJourneyDetail` now shows: **Est. Population** row (first, with cumulative-contacts subtext) · **Entry Criteria** row (from `evDef.metaData.criteriaDescription`, fallback to `j.triggerDescription`). All other rows unchanged.
+   - `JOURNEY_STATUS_COLOR['Draft'] = '#b06f00'` (amber).
+5. `panel.css`: `.scout-jdetail-criteria` (monospace pill for criteria string) + `.scout-jdetail-sub-inline` (lighter inline subtext for est. population context).
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- **Hardcoding `mc.${instance}` without stripping `mc.` first.** Every SFMC-host URL builder must `.replace(/^mc\./, '')` before prepending. The double-prefix bug surfaces as "No data returned" because the fetch fails DNS resolution silently.
+- Treating "No data returned" as missing API support — always check the URL the handler actually built first.
+- Grey Draft pill. Draft uses `#b06f00` (amber) project-wide (see `STATUS_COLORS` / `JOURNEY_STATUS_COLOR` / Activity Report).
+- Calling `eventDefinitions/{id}` alone when expanding a journey. Always pair with `goalstatistics/{id}?versionNumber={N}` (parallel via `Promise.allSettled`) — the est. population is what makes the card useful at a glance.
+- Reading `cumulativePopulationForDay` from a random day. Use `days[0]` (entry day) and prefer the `StartActivity` row — that's the one whose count matches SFMC's UI badge.
+
+---
+
+## 2026-05-18 — Activity report viewer now matches automation tab's code-block theme
+
+**Problem:** Opening a SQL Query or Script activity from the Reports → Activities list rendered the body in a raw `<pre>` with inline styles — no header, no language label, no Copy button, no syntax highlighting. The Automations tab's step viewer (same content type) renders the same SQL/SSJS with a header bar, lang chip, Copy button, and color-coded SQL/SSJS keywords. The visual mismatch made the activity viewer feel half-finished.
+
+**Root cause:** `renderActivityDetail` in `content.js` built its own `preStyle` + `labelStyle` inline strings and called `escHtml(queryText)` directly into a `<pre>`. The automation tab's `renderCodeContent(step)` already uses a shared `.scout-code-block` shape with `highlightSQL` / `highlightJavaScript`, and panel.css owns those classes for both themes. The two paths drifted independently.
+
+**Fix:** Refactored `renderActivityDetail` to emit the same HTML shape as `renderCodeContent`:
+1. SQL Query → `<div class="scout-code-block">` with `.scout-code-header` (SQL chip + Copy button) and `.scout-code-highlighted` running through `highlightSQL()`.
+2. Script → same block with SSJS lang label running through `highlightJavaScript()`.
+3. Metadata-only activities (Send Email, Import, Data Extract, File Transfer, Filter) → `.scout-activity-meta-panel` + `.scout-meta-table` (same shape the automation tab uses for non-code activities), including a `.scout-activity-type-badge` heading and `.scout-activity-desc` description row.
+4. Bound `.scout-code-copy` click handler on the activity-detail container after innerHTML — mirrors the delegated handler in `renderAutomationDetail`.
+
+Removed: every `preStyle` / `labelStyle` inline string and every `style="..."` inline block in the activity body. The classes own both light + dark theming via panel.css.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Building inline `style="font-family:monospace;background:var(--s-bg-2);..."` for activity code bodies. The `.scout-code-block` / `.scout-code-highlighted` classes own the theme. Inline styles bypass theme switching and produce a visual mismatch with the automation tab.
+- Rendering metadata-only activities (Send Email, Import, Data Extract, File Transfer, Filter) as a raw grid of `<div>`s. Use `.scout-activity-meta-panel` + `.scout-meta-table` — same shape as the automation tab.
+- Skipping the `.scout-code-text` hidden span — the Copy button reads from it. Without that span, Copy silently grabs nothing.
+- Calling `escHtml(code)` directly without `highlightSQL` / `highlightJavaScript`. The keyword highlighting is what makes the viewer feel like a code viewer rather than a text dump.
+
+---
+
+## 2026-05-18 — Inline journey detail card (entry source, schedule, linked automation, external key)
+
+**Problem:** Even with status/version/HTS pills on journey rows, the user still had to leave the panel and open Journey Builder to see entry source DE, schedule (one-time vs recurring, start date, timezone), linked automation, or the eventDefinitionKey (externalKey). Demo flow was broken by the round-trip.
+
+**Root cause:** Not a bug — the journey list response stops at `triggers[0].metaData.eventDefinitionId`. The remaining context (data extension name, `metaData.scheduleState`, `schedule.startDateTime/frequency/timeZone`, `automationId`) lives on the per-event-definition GET: `interaction/v1/eventDefinitions/{id}`. That endpoint already works cookie-only via `mc.{stack}.exacttarget.com/cloud/fuelapi/...` and a handler (`handleFetchJourneyEventDefinition`) was already wired in `background.js` — just not used from the UI.
+
+**Fix:**
+1. `content.js` — added `_evDefCache` Map (eventDefId → eventDef, session-scoped) + `fetchJourneyEventDef(id, instance)` that calls the existing handler.
+2. Added `humanizeJourneySchedule(evDef)` mapping `metaData.scheduleFlowMode` + `runOnceScheduleMode` + `schedule.*` into "One-Time Schedule / Run On: 8/15/2025 10:30 AM India Standard Time" / "Every N Days · M occurrences · Ends: Occurrences" / "No Schedule".
+3. Added `renderJourneyDetail(j, state)` that shows Entry Source (type + DE name + DE ID), Schedule (humanized + raw bits), External Key (click-to-copy), Linked Automation (deep-link to automations tab), Category + interaction count + last published date, and Description. Header has an "Open in JB" button.
+4. State held in `S.journeyExpanded` (Set of journey IDs) + `S.journeyDetailState` (Map of state per id). Same expand state drives both main search rows AND DE Usage journey rows — expanding in one place opens the card in both.
+5. Wired into `renderSearchRows()` — journey row click toggles expand (no longer opens URL; that's now a button inside the card). Chevron arrow flips on expand.
+6. Wired into DE Usage `renderUsageDetail('journeys', ...)` — same expand pattern with absolute-positioned chevron.
+7. `panel.css` — `.scout-journey-detail` card + `.scout-jdetail-*` row/label/value/mono/tag styles, theme-aware via existing `--s-*` tokens. Soft slide-in animation. Expanded rows get a subtle bg tint.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Replacing the journey row click handler with `window.open(item.url)` for main search — that was the pre-Phase-C behavior. Click toggles the inline card; external open is the "Open in JB" button inside it.
+- Calling `interaction/v1/eventDefinitions/{id}` from anywhere other than `handleFetchJourneyEventDefinition` (it's the single message route in `background.js`). Don't fetch directly from content.js — the cookie-only proxy works but the handler centralises retry/instance handling.
+- Removing the `_evDefCache` — expanding a row twice should be instant on the second open. Without the cache, every expand fires a network call.
+- Hardcoding theme colors in detail card CSS. Use `var(--s-bg-1)` / `var(--s-text)` / `var(--s-border-1)` so dark + light render the same hierarchy.
+
+---
+
+## 2026-05-18 — Journey rows now show status / version / HTS / channel pills
+
+**Problem:** During demo, journey rows in both main search and the DE "Used by" panel showed only name + version. Users couldn't see at a glance whether a journey was Draft / Running / Stopped, what channel, what trigger type, or whether HTS (high-throughput sending) was enabled — info SFMC's own UI surfaces inline.
+
+**Root cause:** Not a bug — the journey API response includes all of `status`, `channel`, `definitionType`, `entryMode`, `executionMode`, `metaData.highThroughputSending.email`, `triggers[0].type`, `triggers[0].metaData.eventDefinitionId`, etc., but `JourneySearchService.search()` and `DEUsageHandler` journey handlers were only forwarding `id / name / version / status / modifiedDate`. The UI never had the rest to render.
+
+**Fix:**
+1. `handlers/search/JourneySearchService.js` — expanded the mapped output to include `key` (externalKey), `channel`, `definitionType`, `entryMode`, `executionMode`, `isHTS`, `triggerType`, `triggerName`, `eventDefinitionId`, `eventDefinitionKey`, `dataExtensionId`, `dataExtensionName`, `createdDate`, `lastPublishedDate`, `stats`. Also added `activity,campaigns` to the `extras=` query string to match Journey Builder's UI HAR.
+2. `handlers/de/DEUsageHandler.js` — both stream + non-stream journey lookups push the same enriched shape into `matchingJourneys`.
+3. `content.js` — added `renderJourneyPills(j, variant)` helper + `JOURNEY_STATUS_COLOR` map. Main search renders status / vN / HTS / channel / definitionType / triggerType pills under journey rows. DE Usage journey items use a compact variant (status / vN / HTS) plus event name + modified date trailing.
+4. `panel.css` — added `.scout-jpills` + `.scout-jp` pill styles, plus `.scout-usage-item-journey` vertical-layout override.
+
+**Verified by:** TBD — user testing required.
+
+**Never regress to:**
+- Stripping fields out of `JourneySearchService.search()`'s mapped return. Every new field listed above is referenced by the UI; removing one silently breaks a pill.
+- Dropping `activity,campaigns` from `extras=` — Journey Builder's UI sends them; the response shape relies on them.
+- Inline `style="color: …"` for journey status. Use the `JOURNEY_STATUS_COLOR` map so the legend stays consistent across the panel.
+
+---
+
 ## 2026-05-15 — Ghost-tab elimination (architecture migration)
 
 **Problem:** First-load opened a minimized popup window with 4 ghost tabs cycling through Content Builder / Automation / Journey / CloudPages to capture per-section CSRF tokens. Felt like a virus, slow, and triggered intermittent token-staleness errors.

@@ -48,6 +48,20 @@ export class ActivitySearchService {
             { url: `${base}/automation/v1/dataextracts?$page=1&$pageSize=${PS}&${filterParam}`, activityType: 'dataextract', label: 'Data Extract' }
         ];
 
+        // Per-row hydration endpoint factory. `?view=categoryinfo` is the magic
+        // param that adds `folderLocationText` (full breadcrumb) to every
+        // activity-detail response — same param SFMC's UI uses. Confirmed via
+        // HAR on SQL queries; all 7 activity-type endpoints accept it.
+        const HYDRATE_ENDPOINT = {
+            'query':        key => `${base}/automation/v1/queries/${key}?view=categoryinfo`,
+            'script':       key => `${base}/automation/v1/scripts/${key}?view=categoryinfo`,
+            'filter':       key => `${base}/automation/v1/filters/${key}?view=categoryinfo`,
+            'sendemail':    key => `${base}/messaging-internal/v1/emailsenddefinition/${key}?view=categoryinfo`,
+            'import':       key => `${base}/automation/v1/imports/${key}?view=categoryinfo`,
+            'filetransfer': key => `${base}/automation/v1/filetransfers/${key}?view=categoryinfo`,
+            'dataextract':  key => `${base}/automation/v1/dataextracts/${key}?view=categoryinfo`
+        };
+
         const results = [];
 
         await Promise.allSettled(endpoints.map(async ({ url, activityType, label }) => {
@@ -77,9 +91,18 @@ export class ActivitySearchService {
                         activityType,
                         activityTypeLabel: label,
                         id: objectId || key,
+                        // _hydrationKey: key used to address the row in the
+                        // per-row ?view=categoryinfo call. queries use objectId,
+                        // most others use customerKey.
+                        _hydrationKey: (activityType === 'query' && objectId) ? objectId : (key || objectId),
                         name: a.name,
                         description: a.description || a.Description || '',
                         target,
+                        // targetUpdateTypeName is already in the bulk listing
+                        // for queries/imports/extracts — free, no hydration.
+                        updateType: a.targetUpdateTypeName || null,
+                        categoryId: a.categoryId || null,
+                        path: null,  // resolved by hydration below (folderLocationText)
                         modifiedDate: a.modifiedDate || a.lastModifiedDate || null,
                         url: sfmcUrl
                     });
@@ -87,6 +110,37 @@ export class ActivitySearchService {
             } catch (_) {}
         }));
 
-        return results.slice(0, ActivitySearchService.MAX_TOTAL);
+        const limited = results.slice(0, ActivitySearchService.MAX_TOTAL);
+
+        // Hydrate folderLocationText (and updateType for the few endpoints
+        // that DON'T return it inline) in parallel. HTTP/2 multiplexes — N
+        // parallel requests cost ≈ 1 request worth of wall time. Failures
+        // are silent: the row keeps its existing (null) path/updateType.
+        await Promise.allSettled(limited.map(async (r) => {
+            const buildUrl = HYDRATE_ENDPOINT[r.activityType];
+            if (!buildUrl || !r._hydrationKey) return;
+            try {
+                const resp = await fetch(buildUrl(r._hydrationKey), {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: { 'accept': 'application/json' }
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data.folderLocationText) {
+                    // SFMC returns "Query/Production Team/Aldo/X" — convert to
+                    // "Query / Production Team / Aldo / X" for readability.
+                    r.path = String(data.folderLocationText).replace(/\//g, ' / ');
+                }
+                if (!r.updateType && data.targetUpdateTypeName) {
+                    r.updateType = data.targetUpdateTypeName;
+                }
+            } catch (_) { /* silent */ }
+            // Strip the internal hydration key before sending back over the
+            // message bus — content.js doesn't need it.
+            delete r._hydrationKey;
+        }));
+
+        return limited;
     }
 }

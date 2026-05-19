@@ -10,11 +10,11 @@
 Search across your entire SFMC account in one keystroke:
 - **Data Extensions** — name, key, folder path
 - **Automations** — name, status, last run
-- **Journeys** — name, status, version, channel
-- **Content Builder Assets & Emails** — name, type, folder, created by, asset ID
-- **Activities** — SQL Queries, Scripts, Filters, Send Emails, Imports, File Transfers, Data Extracts
+- **Journeys** — name, status pills, version, HTS flag, channel, trigger type. Click to expand: activity count, population, entry source DE, entry criteria (code block), schedule humanizer
+- **Content Builder Assets & Emails & Templates** — name, type, folder breadcrumb, asset ID, Email ID (for emails). Click to expand: file size + dimensions for uploads, Preview button for emails/templates (rendered HTML thumbnail in a modal), Open File button for uploaded files (clickable CDN link)
+- **Activities** — SQL Queries, Scripts, Filters, Send Emails, Imports, File Transfers, Data Extracts. Each row shows the **Folder breadcrumb** ("Query / Production / Team / X") + **Update Mode** chip (Overwrite / Append / Update) — both hydrated per-row via parallel `?view=categoryinfo` calls
 
-Click a result to open it inline (automations) or copy its name to clipboard (assets and emails).
+Results stream in progressively as each source responds.
 
 ### Automations
 - Browse all automations with color-coded status badges (Active, Scheduled, Paused, Error, Ready)
@@ -27,14 +27,16 @@ Click a result to open it inline (automations) or copy its name to clipboard (as
 - **Create** — build a new DE with typed fields, sendable/testable config, and folder selector
 - **Export** — download all DEs as structured JSON or individual files in a ZIP
 - **Import** — restore DEs from a previously exported JSON with optional folder re-creation
-- **Report** — generate a full HTML or CSV report of all DEs with row counts, field counts, and sendable mapping
+- **Report** — generate a full HTML report of all DEs (CSV download lives inside the report)
 
 ### Journeys
-- Browse all active and draft journeys with status, version, and channel
-- Color-coded statuses: Running (green), Draft/Unpublished (yellow), Stopped (red)
+- Browse all active and draft journeys with rich row pills: Status, version, HTS, trigger type, channel, definition type
+- Inline detail card on click — activity count, population (cumulative), entry source DE name + ID, entry criteria as a code block, humanized schedule ("Hourly · Start: 8/25 1:30 AM · End: 8/27 6:00 AM · W. Europe Standard Time"), Open in JB
+- Color-coded statuses: Published/Running (green), Draft/Paused (amber), Stopped (red), Scheduled (blue)
 
 ### Reports
 All reports open in a new tab as standalone HTML pages with:
+- **Download CSV button in the report header** — embedded data, UTF-8 BOM, proper escaping, runs entirely in the page (works offline once opened)
 - Live client-side filter input
 - Sortable columns
 - Color-coded status badges
@@ -42,10 +44,10 @@ All reports open in a new tab as standalone HTML pages with:
 - Dark and light theme support
 
 Available reports:
-- **Automations Report** — name, status, key, last run, schedule, steps, folder, created by
-- **Journeys Report** — name, status, key, version, channel
-- **Assets Report** — name, type, status, ID, customer key, folder, created by
-- **Activities Report** — name, colored type badge, key, target DE, description
+- **Automations Report** — Name · Status · Key · Last Run · Schedule · Steps · Folder · Created By · Description · Created · Modified (folder + step count hydrated per row from the same legacy bulk endpoint the in-panel detail view uses)
+- **Journeys Report** — Name · Status · v · HTS · Trigger · Entry DE · Population · Channel · Modified (Entry DE resolved by joining the bulk event-definitions index)
+- **Assets Report** — Name (clickable CDN link for files) · Type · Status · ID · Email ID · Customer Key · Folder (full breadcrumb) · Created By · Created · Modified
+- **Activities Report** — Name · Type Badge · Key · Target DE · Update Type · Folder · Description · Modified
 - **Data Extensions Report** — full field inventory with row counts, sendable mapping, folder path
 
 ### Snippets
