@@ -502,7 +502,19 @@ function buildAboutModal() {
 
     <div class="scout-about-divider"></div>
 
-    <div class="scout-about-section-label">Built by</div>
+    <div class="scout-about-craft">
+        <div class="scout-about-craft-line">
+            Developed with
+            <svg class="scout-about-heart" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 21s-7-4.5-9.5-9.5C-.5 5.5 4 2 8 4.5c1.5 1 2.5 2 4 4 1.5-2 2.5-3 4-4 4-2.5 8.5 1 5.5 7C19 16.5 12 21 12 21z" fill="currentColor"/>
+            </svg>
+            by
+        </div>
+        <div class="scout-about-craft-name">Aldorino Rrushi</div>
+        <div class="scout-about-craft-sub">MarTech Solution Engineer · SFMC Specialist</div>
+    </div>
+
+    <div class="scout-about-section-label">Find me</div>
     <div class="scout-about-link-cards">
         <a href="https://www.linkedin.com/in/aldorino-rrushi/" target="_blank" rel="noopener" class="scout-about-link-card">
             <div class="scout-about-link-icon">
@@ -536,7 +548,10 @@ function buildAboutModal() {
         </a>
     </div>
 
-    <div class="scout-about-footer">&copy; 2026 Aldorino Rrushi &mdash; All rights reserved</div>
+    <div class="scout-about-footer">
+        <span class="scout-about-code-mark">&lt;/&gt;</span>
+        &copy; 2026 Aldorino Rrushi &middot; Built for the SFMC community
+    </div>
 </div>`;
     return el;
 }

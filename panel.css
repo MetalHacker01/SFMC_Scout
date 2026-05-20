@@ -2279,6 +2279,47 @@
   align-items: center;
 }
 .scout-about-link-card:hover .scout-about-link-arrow { opacity: 1; color: #A78BFA; }
+
+/* Craft block — "Developed with [heart] by Aldorino Rrushi" */
+.scout-about-craft {
+  text-align: center;
+  padding: 4px 24px 18px;
+}
+.scout-about-craft-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--s-text-3);
+  letter-spacing: 0.01em;
+  margin-bottom: 6px;
+}
+.scout-about-heart {
+  color: #ec4899;
+  animation: scoutAboutHeartBeat 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes scoutAboutHeartBeat {
+  0%, 100% { transform: scale(1); }
+  14%      { transform: scale(1.18); }
+  28%      { transform: scale(1); }
+  42%      { transform: scale(1.12); }
+  70%      { transform: scale(1); }
+}
+.scout-about-craft-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--s-text);
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+}
+.scout-about-craft-sub {
+  font-size: 11px;
+  color: var(--s-text-3);
+  margin-top: 5px;
+  letter-spacing: 0.02em;
+}
+
 .scout-about-footer {
   padding: 14px 24px 20px;
   font-size: 11px;
@@ -2286,6 +2327,29 @@
   border-top: 1px solid var(--s-border);
   margin-top: 12px;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.scout-about-code-mark {
+  font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #A78BFA;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+/* Light-theme variants for the new bits */
+#scout-about-overlay.scout-light .scout-about-craft-name { color: var(--s-text); }
+#scout-about-overlay.scout-light .scout-about-craft-sub,
+#scout-about-overlay.scout-light .scout-about-craft-line { color: var(--s-text-3); }
+#scout-about-overlay.scout-light .scout-about-code-mark {
+  color: #6d28d9;
+  background: rgba(124, 58, 237, 0.08);
+  border-color: rgba(124, 58, 237, 0.25);
 }
 
 /* ── Misc ───────────────────────────────────────────────────── */
