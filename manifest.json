@@ -1,15 +1,14 @@
 {
   "manifest_version": 3,
   "name": "SFMC Scout",
-  "version": "2.1.0",
-  "description": "Search and manage Data Extensions, Automations, Journeys, Emails, and more across Salesforce Marketing Cloud — injected panel, no login required.",
+  "version": "2.1.1",
+  "description": "Search Data Extensions, Automations, Journeys, Emails and more in Salesforce Marketing Cloud from one side panel.",
   "author": "Aldorino Rrushi",
 
   "permissions": [
     "storage",
     "webRequest",
-    "tabs",
-    "scripting"
+    "tabs"
   ],
 
   "host_permissions": [

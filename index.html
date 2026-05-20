@@ -1595,8 +1595,7 @@ graph TD
                <tbody>
                   <tr><td><code>webRequest</code></td><td>Intercepting outgoing SFMC requests to capture CSRF tokens from response headers</td></tr>
                   <tr><td><code>storage</code></td><td>Persisting tokens, theme preference, panel width, and snippets in chrome.storage.local</td></tr>
-                  <tr><td><code>tabs</code></td><td>Opening minimized ghost windows for token refresh on first panel open</td></tr>
-                  <tr><td><code>scripting</code></td><td>Injecting <code>injected_script.js</code> into the page context for Ace editor access</td></tr>
+                  <tr><td><code>tabs</code></td><td>Detecting the active SFMC tab to scope cached state and CSRF tokens per stack</td></tr>
                </tbody>
             </table>
 
@@ -1717,7 +1716,7 @@ graph TD
                   <tr><td>Background Worker</td><td>ES Module service worker (<code>background.js</code>)</td></tr>
                   <tr><td>Handler Modules</td><td>~30 files across <code>handlers/</code>, <code>services/</code>, <code>utils/</code>, <code>core/</code></td></tr>
                   <tr><td>Host Permissions</td><td><code>*.exacttarget.com</code>, <code>*.marketingcloudapps.com</code></td></tr>
-                  <tr><td>Permissions</td><td><code>storage</code>, <code>webRequest</code>, <code>tabs</code>, <code>scripting</code></td></tr>
+                  <tr><td>Permissions</td><td><code>storage</code>, <code>webRequest</code>, <code>tabs</code></td></tr>
                   <tr><td>Default Theme</td><td>Light (toggle persisted in <code>chrome.storage.local</code>)</td></tr>
                   <tr><td>Panel Width</td><td>440–1100px (default 660px, drag-resizable, persisted)</td></tr>
                   <tr><td>Dependencies</td><td>None (vanilla JavaScript, inline SVG icons)</td></tr>

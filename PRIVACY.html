@@ -206,7 +206,7 @@ li::marker { color: var(--text-3); }
 
 <section>
   <h2>6. Snippets feature</h2>
-  <p>The Snippets tab lets users save code they write themselves and deploy it into open SFMC editors (CloudPages HTML editor, Script Activity editor) with one click. This uses the <code>chrome.scripting</code> permission to inject the snippet text into the Ace editor on the user's own active SFMC tab. The extension never injects code from any external source. Only code the user themselves saved in the panel can be deployed.</p>
+  <p>The Snippets tab lets users save code they write themselves and deploy it into open SFMC editors (CloudPages HTML editor, Script Activity editor) with one click. The extension reaches the Ace editor on the user's own active SFMC tab through standard DOM access from the injected panel. No code from any external source is injected. Only code the user themselves saved in the panel can be deployed.</p>
 </section>
 
 <section>
