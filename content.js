@@ -1449,18 +1449,22 @@ function renderSearchRows() {
             const isAssetLike = r.type === 'asset' || r.type === 'email';
             const isJourney   = r.type === 'journey';
             const meta1 = [];
-            const meta2 = [];
+            // Variable-length folder path goes on its own wrapping row below the
+            // fixed metadata, so a deep breadcrumb never crowds type/date/IDs.
+            let folderLine = '';
             let pillsHtml = '';
             if (isAssetLike) {
-                // Line 1: type · folder · modified · asset ID  (+ Email ID for emails)
+                // Fixed, scannable facts on one line. createdBy / createdDate are
+                // intentionally omitted here — they live in the expanded detail
+                // card and only added length to the row.
                 if (r.assetType) meta1.push(escHtml(r.assetType));
-                if (r.path) meta1.push(escHtml(r.path));
                 if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
                 if (r.assetId) meta1.push(`ID: ${escHtml(String(r.assetId))}`);
                 if (r.legacyId) meta1.push(`Email ID: ${escHtml(String(r.legacyId))}`);
-                // Line 2: created by · created date
-                if (r.createdBy) meta2.push(`${escHtml(r.createdBy)}`);
-                if (r.createdDate) meta2.push(formatDate(r.createdDate));
+                // Full breadcrumb ("Content Builder / Email / Test") resolved from
+                // the category tree like the Assets report does — falls back to the
+                // leaf until the tree loads (renderSearchResults kicks the fetch).
+                folderLine = r.categoryId ? buildFolderPath(r.categoryId, r.path) : (r.path || '');
             } else if (isJourney) {
                 // Pills row: Status · vN · HTS · channel · definitionType · trigger
                 pillsHtml = renderJourneyPills(r, 'search');
@@ -1469,17 +1473,15 @@ function renderSearchRows() {
                 // in the row preview.
                 if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
             } else if (r.type === 'activity') {
-                // Line 1: type · folder breadcrumb · update mode (SQL/Import/Extract)
-                // Line 2: modified date
                 if (r.activityTypeLabel) meta1.push(escHtml(r.activityTypeLabel));
-                if (r.path) meta1.push(escHtml(r.path));
+                if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
                 if (r.updateType) {
                     meta1.push(`<span class="scout-result-row-pill" title="Update mode">${escHtml(r.updateType)}</span>`);
                 }
-                if (r.modifiedDate) meta2.push(formatDate(r.modifiedDate));
+                folderLine = r.path || '';
             } else {
-                if (r.path) meta1.push(escHtml(r.path));
                 if (r.modifiedDate) meta1.push(formatDate(r.modifiedDate));
+                folderLine = r.path || '';
             }
             const isExpandedJourney = isJourney && S.journeyExpanded.has(r.id);
             const isExpandedAsset   = isAssetLike && S.assetExpanded.has(r.id);
@@ -1493,7 +1495,7 @@ function renderSearchRows() {
                     <div class="scout-result-row-name">${name}</div>
                     ${pillsHtml}
                     ${meta1.length ? `<div class="scout-result-row-meta">${meta1.join(' · ')}</div>` : ''}
-                    ${meta2.length ? `<div class="scout-result-row-meta" style="font-size:10px;color:var(--s-text-3);margin-top:1px;">${meta2.join(' · ')}</div>` : ''}
+                    ${folderLine ? `<div class="scout-result-row-folder">${I.folder}<span>${escHtml(folderLine)}</span></div>` : ''}
                 </div>
                 <span class="scout-result-row-arrow">${arrowIcon}</span>
             </div>`;
@@ -1515,6 +1517,15 @@ function renderSearchResults() {
     if (resultsDiv) {
         resultsDiv.innerHTML = renderSearchRows();
         bindSearchRowEvents(document.getElementById('scout-content'));
+    }
+    // Resolve full folder breadcrumbs for asset/email rows the same way the
+    // Assets report does: pull the category tree once, then re-render so the
+    // collapsed rows show "Content Builder / Email / Test" instead of just the
+    // leaf folder. Guarded so it fires at most once per session (after the tree
+    // loads the cache is populated, so this condition is false on re-render).
+    if (_assetCategoryCache.size === 0 && !_assetCategoryLoad &&
+        S.searchResults.some(r => (r.type === 'asset' || r.type === 'email') && r.categoryId)) {
+        ensureAssetCategoryTree(getCurrentInstance()).then(() => renderSearchResults());
     }
 }
 
@@ -3585,11 +3596,22 @@ async function generateAssetsReport(statusEl) {
         // the leaf folder name. SFMC's UI uses the same idea.
         const catMap = new Map();
         try {
-            const catRes = await sfmcFetch(
-                `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories?$page=1&$pagesize=500`
-            );
-            for (const c of (catRes && catRes.items || [])) {
-                if (c && c.id != null) catMap.set(String(c.id), c);
+            // Paginate through ALL categories. One page of 500 covers sandboxes
+            // but production orgs have more folders than that, so a result's
+            // category can sit on a later page; without it the parent-chain walk
+            // falls back to the leaf name only. Mirrors the quick-search handler.
+            let catPage = 1;
+            while (catPage <= 60) {
+                const catRes = await sfmcFetch(
+                    `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories?$page=${catPage}&$pagesize=500`
+                );
+                const catItems = (catRes && catRes.items) || [];
+                for (const c of catItems) {
+                    if (c && c.id != null) catMap.set(String(c.id), c);
+                }
+                const catTotal = catRes && typeof catRes.count === 'number' ? catRes.count : catMap.size;
+                if (!catItems.length || catMap.size >= catTotal) break;
+                catPage++;
             }
         } catch (_) { /* fall back to leaf-only path if categories endpoint errors */ }
         const buildAssetPath = (catId, fallback) => {

@@ -4,6 +4,29 @@ A chronological log of bugs and their working fixes. **Read this before touching
 
 ---
 
+## 2026-05-27 — Quick search asset/email rows show the full folder breadcrumb (not just the leaf)
+
+**Problem:** Universal search result rows for Assets and Emails showed only the immediate folder name (e.g. "Test"), while the Assets report correctly showed the full path ("Content Builder / Email / Test").
+
+**Root cause:** The collapsed result row rendered `r.path` directly (`content.js` ~1457), which is `item.category.name` — the leaf folder only, set in `AssetSearchService` (line 204). The full-path helper `buildFolderPath` and the `_assetCategoryCache` already existed, but the category tree was only fetched on row *expand* (`ensureAssetCategoryTree` at the asset expand handler), so collapsed rows never had the data. The Assets report works because `generateAssetsReport` fetches the whole category tree up front (its local `buildAssetPath` + `catMap`) and resolves every row before rendering.
+
+**Fix:**
+1. `renderSearchResults` now kicks `ensureAssetCategoryTree(getCurrentInstance())` once when the results contain any asset/email row with a `categoryId`, then re-renders when the tree loads. Guarded on `_assetCategoryCache.size === 0 && !_assetCategoryLoad` so it fires at most once per session (no render loop).
+2. The asset/email row meta now uses `buildFolderPath(r.categoryId, r.path)` — the same resolution the detail card (~1206) and the report use — falling back to the leaf `r.path` until the tree finishes loading.
+3. **Layout:** the folder path moved to its own wrapping line (`.scout-result-row-folder`, folder icon + `word-break: break-word`) so a deep breadcrumb never crowds the fixed metadata. createdBy/createdDate dropped from the collapsed row (still in the detail card). Applied to assets/emails, activities, and the default row type. See [[feedback-variable-length-own-line]].
+4. **Prod pagination (the part that broke on large orgs):** the category fetch was a single page of 500 (`$page=1&$pagesize=500`) in BOTH `handleFetchAssetCategories` (quick search) and the report's inline catMap fetch. Sandboxes have < 500 Content Builder folders so everything resolved; production has more, so a result's leaf/ancestor category sat on a later page, the parent-chain walk found nothing, and it fell back to the leaf name. Both fetches now loop pages until `count` is reached (safety cap 60 pages = 30k categories).
+
+**Verified by:** Sandbox confirmed working by user. Prod (thousands of items) initially failed — fixed by the pagination change (#4); re-verification on prod pending.
+
+**Never regress to:**
+- **Rendering `r.path` directly for asset/email rows.** `r.path` is only the leaf folder name. Resolve the full breadcrumb via `buildFolderPath(r.categoryId, r.path)`, and make sure `ensureAssetCategoryTree` has been kicked off so `_assetCategoryCache` is populated — otherwise it silently falls back to the leaf.
+- **Re-fetching the category tree on every render.** The guard (`size === 0 && !_assetCategoryLoad`) is what stops the `.then(renderSearchResults)` from looping. Keep both halves of it.
+- **Fetching `/asset/v1/content/categories` as a single `$page=1&$pagesize=500` call.** That works in sandbox and silently fails in production (>500 folders) — paths collapse to the leaf with no error. Always paginate to `count`. This bit BOTH the quick-search handler and the report; keep both paginated.
+- **Putting the variable-length path back inline with the fixed metadata.** It belongs on its own wrapping line. See [[feedback-variable-length-own-line]].
+- **Extending the layout change to activities' path *resolution* without checking.** Activities resolve their own breadcrumb upstream (ActivitySearchService); only the layout (own line) was applied to them, not `buildFolderPath`. Don't blanket-apply `buildFolderPath` to every row type.
+
+---
+
 ## 2026-05-19 — Journey audit-log timeline modal + scrollable SQL preview
 
 **Two enhancements:**

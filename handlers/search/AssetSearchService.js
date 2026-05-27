@@ -76,19 +76,38 @@ export async function handleFetchAssetPreview(request, sendResponse) {
 export async function handleFetchAssetCategories(request, sendResponse) {
     const { instance } = request;
     const stack = (instance || 's51').replace(/^mc\./, '');
-    const url = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories?$page=1&$pagesize=500`;
+    const base = `https://mc.${stack}.exacttarget.com/cloud/fuelapi/asset/v1/content/categories`;
+    const PAGE_SIZE = 500;
     try {
-        const resp = await fetch(url, {
-            method: 'GET',
-            credentials: 'include',
-            headers: { accept: 'application/json' }
-        });
-        if (!resp.ok) {
-            sendResponse({ success: false, error: `HTTP ${resp.status}` });
-            return;
+        // Paginate through ALL categories. A single page of 500 is enough for
+        // sandboxes but production orgs have more Content Builder folders than
+        // that, so the leaf/ancestor categories for a given asset can sit on a
+        // later page — without them the client-side parent-chain walk falls
+        // back to the leaf folder name only. Looping also covers servers that
+        // cap the page size below what we ask for.
+        let all = [];
+        let page = 1;
+        while (page <= 60) { // safety cap: 60 * 500 = 30k categories
+            const url = `${base}?$page=${page}&$pagesize=${PAGE_SIZE}`;
+            const resp = await fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+                headers: { accept: 'application/json' }
+            });
+            if (!resp.ok) {
+                // First-page failure is fatal; a later-page failure still lets
+                // us return what we have (partial paths beat none).
+                if (page === 1) { sendResponse({ success: false, error: `HTTP ${resp.status}` }); return; }
+                break;
+            }
+            const data = await resp.json();
+            const items = (data && data.items) || [];
+            all = all.concat(items);
+            const total = data && typeof data.count === 'number' ? data.count : all.length;
+            if (!items.length || all.length >= total) break;
+            page++;
         }
-        const data = await resp.json();
-        sendResponse({ success: true, data });
+        sendResponse({ success: true, data: { items: all, count: all.length } });
     } catch (err) {
         sendResponse({ success: false, error: err.message });
     }

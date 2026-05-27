@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SFMC Scout",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Search Data Extensions, Automations, Journeys, Emails and more in Salesforce Marketing Cloud from one side panel.",
   "author": "Aldorino Rrushi",
 
